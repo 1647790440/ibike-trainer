@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f14">
+<title>iBike 智能骑行控制台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">iBike</span>
+      <span class="sub">智能骑行控制台</span>
+    </div>
+  </header>
+
+  <!-- 全局消息条：连接失败之类的错误必须让人看得见 -->
+  <div id="banner" class="banner hidden" role="alert" aria-live="assertive">
+    <span id="bannerText"></span>
+    <button id="bannerClose" class="banner-close" type="button" aria-label="关闭">×</button>
+  </div>
+
+  <!-- ================= 连接 + 设置 ================= -->
+  <nav id="viewTabs" class="view-tabs">
+    <button type="button" id="btnViewDevices" class="vtab on" data-view="devices">1 连接设备</button>
+    <button type="button" id="btnViewTraining" class="vtab" data-view="training">2 训练</button>
+    <span id="connChips" class="conn-chips"></span>
+  </nav>
+
+  <!-- ================= 视图 1：连接设备 =================
+       这一页只负责"把两台设备接上"：骑行台 + 心率带。训练目标、心率参数、
+       报告都在「训练」那一页，免得连接的时候被一堆参数淹没。 -->
+  <section id="devicesView">
+  <!-- 三块都放在这个容器里：它由「1 连接设备 / 2 训练」的导航切换显示。
+       容器本身不再是 .card（三块各自是卡片），否则会出现双层边框。 -->
+  <section class="card">
+    <div class="card-head">
+      <h2>1. 扫描与连接</h2>
+    </div>
+
+    <div class="row">
+      <button id="btnScan" class="btn btn-primary">扫描蓝牙设备</button>
+      <button id="btnSim" class="btn btn-ghost">用模拟设备</button>
+    </div>
+    <p id="scanHint" class="hint">骑行台通上电、踩两圈唤醒它；心率带戴上（电极沾点水）。
+      点一次扫描，骑行台和心率带会一起找出来，点一下就能连。</p>
+
+    <div id="foundBlock" class="found-block hidden">
+      <div class="found-group">
+        <h3 class="found-title">找到的骑行台</h3>
+        <ul id="deviceList" class="device-list"></ul>
+        <p id="deviceEmpty" class="hint hidden">没搜到骑行台。确认它已通电、没被手机上的 App 占用。</p>
+      </div>
+      <div class="found-group">
+        <h3 class="found-title">找到的心率带</h3>
+        <ul id="hrList" class="device-list"></ul>
+        <p id="hrEmpty" class="hint hidden">没搜到心率带。戴上它（电极沾点水）它会开始广播，再扫一次。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 块 2：骑行台状态 + 实时数据。扫到之后点一下就连上，
+       这里立刻能看到功率/踏频在动，一眼就知道连没连上。 -->
+  <section class="card">
+    <div class="card-head">
+      <h2>2. 骑行台</h2>
+      <span class="dev-head-right">
+        <span id="trainerPill" class="pill pill-off">未连接</span>
+        <span id="trainerName" class="conn-name">—</span>
+        <button id="btnDisconnect" class="btn btn-ghost btn-mini hidden">断开</button>
+      </span>
+    </div>
+    <div class="metrics dev-metrics">
+      <div class="metric"><span class="m-label">功率</span><span id="devPower" class="m-value">--</span><span class="m-unit">W</span></div>
+      <div class="metric"><span class="m-label">踏频</span><span id="devCadence" class="m-value">--</span><span class="m-unit">rpm</span></div>
+      <div class="metric"><span class="m-label">速度</span><span id="devSpeed" class="m-value">--</span><span class="m-unit">km/h</span></div>
+      <div class="metric"><span class="m-label">阻力档位</span><span id="devRes" class="m-value">--</span><span class="m-unit"></span></div>
+    </div>
+    <p id="trainerHint" class="hint">还没连接。在上面扫描，然后点列表里的骑行台。</p>
+  </section>
+
+  <!-- 块 3：心率带状态 + 实时数据 -->
+  <section class="card">
+    <div class="card-head">
+      <h2>3. 心率带</h2>
+      <span class="dev-head-right">
+        <span id="hrPill" class="pill pill-off">未连接</span>
+        <span id="hrName" class="conn-name">—</span>
+        <span id="hrBattery" class="hr-batt"></span>
+        <button id="btnHrDisconnect" class="btn btn-ghost btn-mini hidden">断开</button>
+      </span>
+    </div>
+    <div class="metrics dev-metrics dev-metrics-hr">
+      <div class="metric"><span class="m-label">心率</span><span id="devHr" class="m-value">--</span><span class="m-unit">bpm</span></div>
+      <div class="metric"><span class="m-label">区间</span><span id="devHrZone" class="m-value">--</span><span class="m-unit"></span></div>
+      <div class="metric"><span class="m-label">电极</span><span id="devHrContact" class="m-value">--</span><span class="m-unit"></span></div>
+    </div>
+    <p id="hrHint" class="hint">还没连接。心率带是可选的——只连骑行台也能正常训练。
+      在上面「扫描与连接」里点它就连上了；连过一次之后，下次启动会自动重连。</p>
+  </section>
+  </section><!-- /devicesView -->
+
+  <!-- ================= 视图 2：训练 ================= -->
+  <section id="trainingView" class="hidden">
+
+  <section id="setupPanel" class="card">
+    <div class="card-head">
+      <h2>心率参数</h2>
+    </div>
+
+    <!-- 心率参数：四行一条一条列，标签和输入框对齐。
+         以前用 .row + .field 那套（给大号 FTP 输入框设计的），
+         在自动宽度的 flex 项里宽度会飘，而且输入框会继承全局 30px 的字号。 -->
+    <div class="hr-settings">
+      <div class="hr-set-row">
+        <label for="hrMaxInput">最大心率</label>
+        <input id="hrMaxInput" type="number" min="100" max="230" step="1" value="180">
+        <span class="hr-note">bpm · 心率区间按它划分</span>
+      </div>
+      <div class="hr-set-row">
+        <label for="hrRestInput">静息心率</label>
+        <input id="hrRestInput" type="number" min="30" max="120" step="1" value="60">
+        <span class="hr-note">bpm · 只在用「储备心率」算法时需要</span>
+      </div>
+      <div class="hr-set-row">
+        <label for="hrZoneMode">区间算法</label>
+        <select id="hrZoneMode">
+          <option value="max">按最大心率百分比</option>
+          <option value="reserve">按储备心率（Karvonen，更准）</option>
+        </select>
+      </div>
+      <div class="hr-set-row">
+        <label class="check" for="hrLimitEnabled">
+          <input id="hrLimitEnabled" type="checkbox">
+          <span>上限保护</span>
+        </label>
+        <input id="hrLimitInput" type="number" min="100" max="220" step="1" value="165">
+        <span class="hr-note">bpm · 超过并持续 10 秒就自动下调功率（最多降到本段的 80%）</span>
+      </div>
+    </div>
+    <p class="hint">
+      上限保护是<strong>刹车</strong>，不是控制方式：心率本身滞后几十秒，所以程序不会
+      拿它做闭环控制，而是分几步往下让、心率回落后再回到原计划。自由骑行时不改功率，只提示。
+    </p>
+
+    <div class="card-head mt">
+      <h2>设定训练目标</h2>
+    </div>
+
+    <div class="tabs">
+      <button type="button" class="tab on" data-mode="constant">恒定功率</button>
+      <button type="button" class="tab" data-mode="interval">间歇训练 HIIT</button>
+      <button type="button" class="tab" data-mode="custom">自定义课程</button>
+      <button type="button" class="tab" data-mode="test">FTP 测试</button>
+    </div>
+
+    <!-- FTP 由间歇训练和自定义课程共用 -->
+    <div id="ftpBlock" class="field hidden">
+      <label for="ftpInput">你的 FTP（乳酸阈值功率）</label>
+      <div class="power-row">
+        <input id="ftpInput" type="number" min="50" max="600" step="1" value="200">
+        <span class="unit">W</span>
+      </div>
+      <p class="hint" id="ftpHint">
+        强度都按这个值的百分比计算——乳酸阈值因人而异，只有表达成阈值百分比才算科学。
+        不确定的话：FTP ≈ 你能全力骑 20 分钟的平均功率 × 0.95，或者先用 200W 试一次，
+        体感太轻/太重再改。
+      </p>
+    </div>
+
+    <!-- ---------- 恒定功率 ---------- -->
+    <div id="constantFields">
+      <div class="field">
+        <label for="targetPower">目标功率</label>
+        <div class="power-row">
+          <input id="targetPower" type="number" min="1" max="2000" step="1" value="100">
+          <span class="unit">W</span>
+        </div>
+        <input id="powerSlider" type="range" min="20" max="500" step="5" value="100">
+        <div class="chips">
+          <button class="chip" data-power="80">80W</button>
+          <button class="chip" data-power="100">100W</button>
+          <button class="chip" data-power="150">150W</button>
+          <button class="chip" data-power="200">200W</button>
+          <button class="chip" data-power="250">250W</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="duration">骑行时长</label>
+        <div class="power-row">
+          <input id="duration" type="number" min="1" max="600" step="1" value="60">
+          <span class="unit">分钟</span>
+        </div>
+        <div class="chips">
+          <button class="chip" data-min="20">20 分钟</button>
+          <button class="chip" data-min="30">30 分钟</button>
+          <button class="chip" data-min="45">45 分钟</button>
+          <button class="chip" data-min="60">60 分钟</button>
+          <button class="chip" data-min="90">90 分钟</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- 间歇训练 ---------- -->
+    <div id="intervalFields" class="hidden">
+      <div class="field">
+        <label>训练方案</label>
+        <div id="templateList" class="template-list"></div>
+        <p id="templateDesc" class="hint"></p>
+      </div>
+
+      <div class="field">
+        <label>参数（改动后下方课表立即更新）</label>
+        <div id="templateParams" class="param-grid"></div>
+      </div>
+
+      <div class="field">
+        <label>课表预览</label>
+        <canvas id="planChart" height="100"></canvas>
+        <div id="planStats" class="plan-stats"></div>
+        <ul id="planList" class="plan-list"></ul>
+      </div>
+    </div>
+
+    <!-- ---------- FTP 测试 ---------- -->
+    <div id="testFields" class="hidden">
+      <div class="field">
+        <label>测试方案</label>
+        <div id="testList" class="template-list"></div>
+        <p id="testDesc" class="hint"></p>
+      </div>
+
+      <div class="field">
+        <label>参数（改动后下方课表立即更新）</label>
+        <div id="testParams" class="param-grid"></div>
+      </div>
+
+      <div class="field">
+        <label>课表预览</label>
+        <canvas id="testPlanChart" height="100"></canvas>
+        <div id="testPlanStats" class="plan-stats"></div>
+        <ul id="testPlanList" class="plan-list"></ul>
+      </div>
+    </div>
+
+    <!-- ---------- 自定义课程 ---------- -->
+    <div id="customFields" class="hidden">
+      <div class="field">
+        <div class="editor-head">
+          <label>我的课程</label>
+          <button id="btnNewCourse" class="btn btn-mini" type="button">＋ 新建课程</button>
+        </div>
+        <div id="customList" class="template-list"></div>
+        <p id="customEmpty" class="hint">还没有自定义课程，点「新建课程」开始。</p>
+      </div>
+
+      <div id="courseEditor" class="hidden">
+        <div class="field">
+          <label for="courseName">课程名称</label>
+          <input id="courseName" class="text-input" type="text" maxlength="40"
+                 placeholder="我的课程">
+        </div>
+
+        <div class="field">
+          <label>功率怎么表示</label>
+          <div class="tabs tabs-sm">
+            <button type="button" class="tab on" data-pmode="pct">按 %FTP（跟着阈值变）</button>
+            <button type="button" class="tab" data-pmode="abs">按绝对瓦数（固定不变）</button>
+          </div>
+          <p class="hint" id="pmodeHint"></p>
+        </div>
+
+        <div class="field">
+          <div class="editor-head">
+            <label>小节（共 <span id="stepCount">0</span> 节，总计 <span id="stepTotal">0:00</span>）</label>
+            <button id="btnAddStep" class="btn btn-mini" type="button">＋ 添加小节</button>
+          </div>
+          <div id="stepRows" class="step-rows"></div>
+        </div>
+
+        <div class="field">
+          <label>课表预览</label>
+          <canvas id="customPlanChart" height="100"></canvas>
+          <div id="customPlanStats" class="plan-stats"></div>
+          <ul id="customPlanList" class="plan-list"></ul>
+        </div>
+
+        <div class="row">
+          <button id="btnSaveCourse" class="btn btn-primary" type="button">保存课程</button>
+          <button id="btnDeleteCourse" class="btn btn-danger" type="button">删除课程</button>
+        </div>
+        <p id="saveHint" class="hint"></p>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="ergMode">控功率方式</label>
+      <select id="ergMode">
+        <option value="auto">自动（推荐）</option>
+        <option value="ftms">原生 ERG（骑行台内部闭环）</option>
+        <option value="resistance">闭环阻力（上位机调节阻力）</option>
+      </select>
+      <p class="hint" id="modeHint">自动模式会优先用原生 ERG；如果骑行台不理会目标功率，会自动改用闭环阻力控制。</p>
+    </div>
+
+    <button id="btnStart" class="btn btn-start" disabled>开始训练</button>
+    <p id="startHint" class="hint"></p>
+  </section>
+
+
+  <!-- ================= 进行中 / 总结 / 报告（都在训练页里） ==============
+  <!-- ================= 进行中 ================= -->
+  <section id="livePanel" class="card hidden">
+    <div class="live-head">
+      <div class="live-title">
+        <span id="stateBadge" class="badge">进行中</span>
+        <span id="modeBadge" class="badge badge-mode">—</span>
+        <span id="planBadge" class="badge badge-plan hidden">—</span>
+      </div>
+      <div class="live-actions">
+        <button id="btnPause" class="btn btn-ghost">暂停</button>
+        <button id="btnStop" class="btn btn-danger">结束</button>
+      </div>
+    </div>
+
+    <!-- FTP 测试专用：当前级数 / 实时读数 / 自由骑行时的阻力微调 -->
+    <div id="testBar" class="interval-bar hidden">
+      <div class="iv-head">
+        <span id="testName" class="iv-name">—</span>
+        <span id="testLevel" class="iv-zone hidden">—</span>
+        <span id="testLive" class="iv-rep"></span>
+      </div>
+      <canvas id="testChart" height="64"></canvas>
+      <div class="iv-foot">
+        <span id="testNote" class="iv-next"></span>
+        <span id="testFreeCtl" class="iv-skip hidden">
+          <button id="btnResDown" class="btn btn-mini" type="button">阻力 −</button>
+          <button id="btnResUp" class="btn btn-mini" type="button">阻力 ＋</button>
+        </span>
+      </div>
+    </div>
+
+    <!-- 间歇训练专用：当前段 / 进度条 / 下一段 -->
+    <div id="intervalBar" class="interval-bar hidden">
+      <div class="iv-head">
+        <span id="ivName" class="iv-name">—</span>
+        <span id="ivZone" class="iv-zone"></span>
+        <span id="ivRep" class="iv-rep"></span>
+      </div>
+      <canvas id="ivChart" height="64"></canvas>
+      <div class="iv-foot">
+        <span id="ivNext" class="iv-next"></span>
+        <span class="iv-skip">
+          <button id="btnSkipBack" class="btn btn-mini" type="button">上一段</button>
+          <button id="btnSkip" class="btn btn-mini" type="button">跳过本段</button>
+        </span>
+      </div>
+    </div>
+
+    <div class="hero">
+      <div class="ring-wrap">
+        <svg viewBox="0 0 200 200" class="ring">
+          <circle class="ring-bg" cx="100" cy="100" r="88"></circle>
+          <circle id="ringFg" class="ring-fg" cx="100" cy="100" r="88"></circle>
+        </svg>
+        <div class="ring-center">
+          <div id="timeLeft" class="time-left">60:00</div>
+          <div id="timeLabel" class="time-label">剩余时间</div>
+        </div>
+      </div>
+
+      <div class="power-block">
+        <div class="power-now">
+          <span id="powerNow">--</span><span class="power-unit">W</span>
+        </div>
+        <div class="power-target">
+          目标 <strong id="powerTarget">100</strong> W
+          <span id="powerDelta" class="delta"></span>
+        </div>
+        <div id="totalTime" class="total-time"></div>
+        <div class="adjust">
+          <button class="btn btn-step" data-delta="-10">−10</button>
+          <button class="btn btn-step" data-delta="-5">−5</button>
+          <button class="btn btn-step" data-delta="5">+5</button>
+          <button class="btn btn-step" data-delta="10">+10</button>
+        </div>
+      </div>
+    </div>
+
+    <canvas id="chart" height="180"></canvas>
+
+    <div class="metrics">
+      <div class="metric"><span class="m-label">踏频</span><span id="mCadence" class="m-value">--</span><span class="m-unit">rpm</span></div>
+      <div class="metric"><span class="m-label">平均功率</span><span id="mAvg" class="m-value">--</span><span class="m-unit">W</span></div>
+      <div class="metric"><span class="m-label">最大功率</span><span id="mMax" class="m-value">--</span><span class="m-unit">W</span></div>
+      <div class="metric"><span class="m-label">标准化功率</span><span id="mNp" class="m-value">--</span><span class="m-unit">W</span></div>
+      <div class="metric"><span class="m-label">距离</span><span id="mDist" class="m-value">--</span><span class="m-unit">km</span></div>
+      <div class="metric"><span class="m-label">做功</span><span id="mKj" class="m-value">--</span><span class="m-unit">kJ</span></div>
+      <div class="metric"><span class="m-label">阻力档位</span><span id="mRes" class="m-value">--</span><span class="m-unit"></span></div>
+      <div class="metric"><span class="m-label">心率</span><span id="mHr" class="m-value">--</span><span class="m-unit">bpm</span><span id="mHrZone" class="m-sub"></span></div>
+    </div>
+
+    <p id="note" class="note"></p>
+  </section>
+
+  <!-- ================= 训练总结 ================= -->
+  <section id="summaryPanel" class="card hidden">
+    <div class="summary-head">
+      <div>
+        <h2 id="sumTitle">训练总结</h2>
+        <p id="sumSub" class="summary-sub"></p>
+      </div>
+      <span id="sumBadge" class="badge">已完成</span>
+    </div>
+
+    <div class="sum-hero">
+      <div class="sum-hero-main">
+        <span id="sumAvg" class="sum-big">--</span><span class="sum-big-unit">W</span>
+        <div class="sum-hero-label">平均功率</div>
+      </div>
+      <div class="sum-hero-side">
+        <div class="sum-target-line">目标功率 <strong id="sumTarget">--</strong> W</div>
+        <div id="sumDelta" class="sum-delta"></div>
+        <div id="sumMode" class="sum-mode"></div>
+      </div>
+    </div>
+
+    <div class="sum-quality">
+      <div class="sum-quality-head">
+        <span id="sumQualityLabel">控功率达标率</span>
+        <strong id="sumInZone">--</strong>
+      </div>
+      <div class="sum-bar"><div id="sumInZoneBar" class="sum-bar-fill"></div></div>
+      <p id="sumQualityNote" class="hint"></p>
+    </div>
+
+    <canvas id="sumChart" height="180"></canvas>
+
+    <div class="metrics" id="sumMetrics"></div>
+
+    <div class="sum-dist">
+      <h3>功率区间分布</h3>
+      <div id="sumDist" class="dist-rows"></div>
+    </div>
+
+    <div id="sumTestSection" class="sum-dist hidden">
+      <h3>FTP 测试结果</h3>
+      <div class="test-result">
+        <div class="tr-main">
+          <span id="trFtp" class="tr-big">--</span><span class="tr-unit">W</span>
+          <div class="tr-label">功能阈值功率</div>
+        </div>
+        <div class="tr-side">
+          <div id="trSource"></div>
+          <div id="trFormula"></div>
+          <div id="trDetail"></div>
+        </div>
+      </div>
+      <p id="trInvalid" class="hint"></p>
+      <div class="row">
+        <button id="btnUseFtp" class="btn btn-primary" type="button">用这个 FTP</button>
+      </div>
+    </div>
+
+    <div id="sumHrSection" class="sum-dist hidden">
+      <h3>心率</h3>
+      <div id="sumHrStats" class="sum-row"></div>
+      <div id="sumHrZones" class="hr-zones"></div>
+      <p class="hint" id="sumHrHint"></p>
+    </div>
+
+    <div id="sumModeSection" class="sum-dist hidden">
+      <h3>控功率方式切换</h3>
+      <div id="sumModeChanges" class="iv-table"></div>
+      <p class="hint">
+        训练中途切换过控功率方式。切换时闭环控制器会从骑行台当前档位接手，
+        不再像以前那样从量程的四分之一起步（那会让阻力先掉一大截再慢慢爬回来）。
+        如果这里出现「目标功率探测」，说明程序怀疑固件没在跟目标功率，先故意把目标
+        压低一档验证了 20 秒——那段时间的功率凹坑是探测本身造成的，不是故障。
+      </p>
+    </div>
+
+    <div id="sumIntervalSection" class="sum-dist hidden">
+      <h3>分段明细</h3>
+      <div id="sumIntervals" class="iv-table"></div>
+      <p class="hint">
+        「达标」只对高强度段有意义：恢复段的目标是降下来，而飞轮有惯性，几秒的
+        恢复期内功率物理上降不到目标值，所以那一列留空。每段开头的一小段过渡期
+        也不计入统计。
+      </p>
+    </div>
+
+    <div class="sum-actions">
+      <button id="btnAgain" class="btn btn-primary">再来一次</button>
+      <button id="btnDeleteReport" class="btn btn-danger hidden">删除这份报告</button>
+      <button id="btnDismiss" class="btn btn-ghost">关闭</button>
+    </div>
+  </section>
+
+  <!-- ================= 训练报告 ================= -->
+  <section id="reportsPanel" class="card">
+    <div class="card-head">
+      <h2>训练报告</h2>
+      <button id="btnClearReports" class="btn btn-mini hidden">清空全部</button>
+    </div>
+    <p id="reportsEmpty" class="hint">还没有训练记录。每次训练结束会自动保存一份报告。</p>
+    <ul id="reportsList" class="report-list"></ul>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>运行日志</h2>
+      <button id="btnClearLog" class="btn btn-mini">清空</button>
+    </div>
+    <ul id="log" class="log"></ul>
+  </section>
+
+  </section><!-- /trainingView -->
+
+  <footer class="foot">
+    本地运行 · 骑行台通过蓝牙直连本机 · 关闭终端即停止
+  </footer>
+
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
