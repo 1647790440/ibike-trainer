@@ -226,6 +226,7 @@ issue 里，才有可能加上适配。
 | [docs/design-notes.md](docs/design-notes.md) | 控功率两条路径（原生 ERG / 闭环阻力）、自动降级的判定、诊断脚本的来龙去脉、报告存储、已知限制 |
 | [docs/heart-rate-features.md](docs/heart-rate-features.md) | 心率功能的候选清单（已实现哪些、还可以做什么） |
 | [docs/apple-watch-heart-rate.md](docs/apple-watch-heart-rate.md) | 为什么用心率带而不是 Apple Watch（调研笔记） |
+| [docs/packaging-options.md](docs/packaging-options.md) | 想做成桌面 App / 手机 App 的可行性评估（含难度、坑、参考链接） |
 
 ## 开发
 
