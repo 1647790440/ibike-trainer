@@ -564,6 +564,72 @@ async def test_trainer_and_strap_are_independent() -> None:
         await runner.cleanup()
 
 
+# ======================================================================
+# 9. 骑行台自带的心率字段：0 要当成"没有数据"
+# ======================================================================
+
+
+async def test_trainer_heart_rate_field() -> None:
+    """骑行台报 0 bpm 时不能当成有效心率。
+
+    很多固件的 Indoor Bike Data 里那个心率字段在没接心率带时照发 0。
+    真机（FitShow FS-BLE-V3X）实测就是全 0，而程序当时直接收下，于是报告里
+    多出一个"平均心率 0 bpm、100% 在 Z1"的假区块，实时界面也显示 0。
+    """
+    print("\n[9] 骑行台自带心率字段为 0 时按无效处理")
+    from ibike.session import WorkoutSession
+    from ibike.simulator import SimulatedTrainer
+
+    class TrainerWithHr(SimulatedTrainer):
+        """在 Indoor Bike Data 里带一个心率字段（值可调）。"""
+
+        def __init__(self, bpm, **kw):
+            super().__init__(**kw)
+            self.fake_hr = bpm
+
+        def _tick(self, dt):                       # noqa: D102 - 覆写模拟器
+            super()._tick(dt)
+            if self.latest:
+                self.latest["heart_rate_bpm"] = self.fake_hr
+
+    async def run_one(bpm):
+        trainer = TrainerWithHr(bpm, cadence=85.0)
+        await trainer.connect()
+        session = WorkoutSession(trainer)
+        try:
+            await session.start(100.0, duration_min=5, erg_mode="auto")
+            await asyncio.sleep(2.0)
+            snap = session.snapshot()
+            await session.stop()
+            return snap, (session.summary or {})
+        finally:
+            await session.aclose()
+            await trainer.disconnect()
+
+    snap, summary = await run_one(0)
+    check(snap.get("heart_rate") is None, "心率 0 时不显示为有效读数",
+          str(snap.get("heart_rate")))
+    check(snap.get("hr_source") is None, "也不声称心率来自骑行台",
+          str(snap.get("hr_source")))
+    check(summary.get("heart_rate") is None,
+          "报告里不再出现「平均心率 0 bpm」的假区块",
+          str(summary.get("heart_rate")))
+
+    snap2, summary2 = await run_one(300)
+    check(snap2.get("heart_rate") is None, "心率 300bpm（坏帧）同样丢掉")
+    check(summary2.get("heart_rate") is None, "也不会进报告")
+
+    # 真正有效的心率必须照常收下——有些动感单车确实自己带心率
+    snap3, summary3 = await run_one(132)
+    check(snap3.get("heart_rate") == 132.0, "骑行台报正常心率时照常采用",
+          str(snap3.get("heart_rate")))
+    check(snap3.get("hr_source") == "trainer", "来源标成骑行台",
+          str(snap3.get("hr_source")))
+    stats = summary3.get("heart_rate") or {}
+    check(stats.get("avg_bpm") == 132.0, "报告里有心率统计",
+          str(stats.get("avg_bpm")))
+
+
 def main() -> int:
     print("=" * 70)
     print("心率带测试")
@@ -576,6 +642,7 @@ def main() -> int:
     asyncio.run(test_hr_endpoints())
     asyncio.run(test_idle_live_data())
     asyncio.run(test_trainer_and_strap_are_independent())
+    asyncio.run(test_trainer_heart_rate_field())
 
     print("\n" + "=" * 70)
     if _failures:

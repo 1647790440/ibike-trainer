@@ -29,7 +29,8 @@ from collections import deque
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 from .ftptest import KIND_TEST, RESULT_BEST_SEGMENT, RESULT_RAMP
-from .heartrate import hr_zone_of, hr_zones
+from .heartrate import (HR_MAX_PLAUSIBLE, HR_MIN_PLAUSIBLE, hr_zone_of,
+                        hr_zones)
 from .trainer import TrainerError
 
 log = logging.getLogger("ibike.session")
@@ -754,7 +755,10 @@ class WorkoutSession:
                        if self._cadence_time > 0 else None)
 
         # 心率：平均/最大从 trace 里算（心率可能中途才有带子，用实际采到的样本）
-        hr_samples = [float(s["hr"]) for s in trace if s.get("hr") is not None]
+        # 再筛一道：老报告里可能已经存着 0（那是修复前写进去的），
+        # 不能让一条 0 就撑起一个"心率"区块
+        hr_samples = [float(s["hr"]) for s in trace if s.get("hr") is not None
+                      and HR_MIN_PLAUSIBLE <= float(s["hr"]) <= HR_MAX_PLAUSIBLE]
         hr_stats = None
         if hr_samples:
             band = self._hr_settings()
@@ -1312,8 +1316,17 @@ class WorkoutSession:
             self.current_hr = hr_fresh
             self.hr_contact = (hr_latest or {}).get("contact")
         elif "heart_rate_bpm" in latest:
-            self.current_hr = float(latest["heart_rate_bpm"])
-            self.hr_source = "trainer"
+            bpm = float(latest["heart_rate_bpm"])
+            # 骑行台自带的心率字段（FTMS Indoor Bike Data 里的那个）经常是 **0**：
+            # 固件没接心率带时也照发这个字段。0 不是"心率很低"，是"没有数据"，
+            # 以前直接收下，于是报告里出现"平均心率 0 bpm、100% 在 Z1"的假区块，
+            # 实时界面那个心率格子也会显示 0。这里和独立心率带那条路用同一套范围。
+            if HR_MIN_PLAUSIBLE <= bpm <= HR_MAX_PLAUSIBLE:
+                self.current_hr = bpm
+                self.hr_source = "trainer"
+            else:
+                self.current_hr = None
+                self.hr_source = None
             self.rr_intervals = 0
         else:
             self.current_hr = None
