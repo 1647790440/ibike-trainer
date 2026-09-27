@@ -90,6 +90,7 @@ k ← (1-α)·k + α·(P / (R·C))
 | 动作 | 训练会怎样 |
 |---|---|
 | 骑行台断电/断链 | **挂起**：计时冻结、数据留着，`trainer_lost` 置位，提示"去重连" |
+| 蓝牙半开（哑了但没报断开） | 秒表会跟着走一会儿；用户重连时同样只挂起、不结束（判据是"这场还没骑完"，不是"收到过断连事件"） |
 | 重新连上骑行台（`/api/connect`） | **接回**这场训练：换设备对象，已骑时长/曲线/心率累计原样保留，仍是暂停，等用户点「继续」 |
 | 点「继续」 | 重新申请控制权 + 重新下发目标（新链路的 FTMS 状态是干净的） |
 | 点「结束」/ 跑满时长 | 收尾 + 写报告 |
@@ -100,10 +101,13 @@ k ← (1-α)·k + α·(P / (R·C))
 - `WorkoutSession.handle_trainer_lost()`：同步方法（它由蓝牙断连回调直接调用，
   那里没有 await 的机会）。把 `running` 降为 `paused` 以冻结计时，清掉当前功率和
   观察窗口（不能拿冻结值继续积分），作废正在进行的降级探测，置 `trainer_lost`。
-- `WorkoutSession.rebind_trainer()`：只换 `self.trainer` 和"与旧链路绑定"的标定
+- `WorkoutSession.rebind_trainer()`：换 `self.trainer`、清掉"与旧链路绑定"的标定
   （闭环控制器的 `k`/档位在台子断过电之后不再可信，丢掉重来），训练本体的数据
-  一律不碰。**不在这里下发任何指令**——控制权要重新申请、目标要重新下发，统一
-  交给用户点「继续」时的 `resume()`，那时设备才是真的就绪。
+  一律不碰。会话处于暂停时**不在这里下发指令**——控制权要重新申请、目标要重新
+  下发，统一交给用户点「继续」时的 `resume()`（内部就是 `_reapply_control()`），
+  那时设备才是真的就绪。会话还在跑（链路半开、断连回调没来的情况）时例外：
+  立刻 `_reapply_control()` 把控制接回来，否则界面写着"原生 ERG"、实际一条指令
+  都没下发过，比明确报错更难发现。
 - `Server._connect_trainer()`：连接前先看有没有"还没骑完"的会话（`is_unfinished()`）。
   有就 `_disconnect_trainer(keep_session=True)`（只摘掉旧设备对象，不 stop），
   连上之后 `rebind_trainer()`。连不上也不能把挂起的训练弄丢——否则一次手滑点错
@@ -226,7 +230,7 @@ BLE 外设把真实的 `TrainerClient` 跑起来，覆盖服务发现、能力�
 .venv/bin/python tests/test_ftptest.py           # FTP 测试
 .venv/bin/python tests/test_heartrate.py         # 心率带：帧解析、区间、上限保护、接口
 .venv/bin/python tests/test_server_hardening.py  # 服务端加固（实时推送/断开存报告/跨站/畸形输入）
-.venv/bin/python tests/test_trainer_loss.py      # 骑行台掉线挂起 / 重连接回 / 显式断开仍存报告
+.venv/bin/python tests/test_trainer_loss.py      # 骑行台掉线挂起 / 重连接回 / 链路半开 / 显式断开仍存报告
 node tests/test_frontend_smoke.js                # 前端冒烟（需要 node）
 ```
 
@@ -244,6 +248,8 @@ node tests/test_frontend_smoke.js                # 前端冒烟（需要 node）
 - 训练中断开连接 / 关服务时，这一场要照常落盘成报告
 - 骑行台掉线只把训练**挂起**（计时冻结、不写报告），重连要能接回同一场训练；
   只有「结束」/跑满时长/显式「断开」才收尾
+- 掉线时**没触发断连回调**（蓝牙半开）也不能丢训练，而且接回来之后必须重新
+  申请控制权、重新下发目标（不能停在"显示在骑、其实没人管"）
 - 报告 id 的目录穿越、损坏文件不影响启动、上限裁剪
 - 服务端：跨站请求拦截、畸形 JSON 不 500、请求体过大如实回 413
 - 前端：状态渲染、两页切换、设备块、报告里的心率与切换记录

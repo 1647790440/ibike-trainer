@@ -583,20 +583,30 @@ class WorkoutSession:
         self._notify("paused", "已暂停")
         await self._emit()
 
+    async def _reapply_control(self) -> None:
+        """重新申请控制权，并把当前目标重新下发一遍。
+
+        两个地方要用它，都是"换了链路/重新接管"的场景：
+        「继续」（暂停之后）、以及骑行台重连接回一场**还在跑**的训练
+        （链路半开、没触发断连回调的那种）。新链路的 FTMS 状态是干净的，
+        不重新下发的话界面写着"闭环阻力"，实际一下都不会动。
+        """
+        await self.trainer.start()
+        if self.active_erg_mode == ERG_RESISTANCE:
+            await self._enter_resistance_mode(initial=False)
+        elif self.active_erg_mode == ERG_FREE:
+            # 自由骑行绝不能下发目标功率：那会让固件进入 ERG、把功率锁死在
+            # 设定值上，20/8 分钟 FTP 测试测出来的就变成"你设的那个数"了。
+            # 重新确认一次阻力档位即可（和 _enter_free_mode 做的事一样）。
+            await self._enter_free_mode()
+        else:
+            await self._send_target_power(self.target_power)
+
     async def resume(self) -> None:
         if self.state != STATE_PAUSED:
             return
         try:
-            await self.trainer.start()
-            if self.active_erg_mode == ERG_RESISTANCE:
-                await self._enter_resistance_mode(initial=False)
-            elif self.active_erg_mode == ERG_FREE:
-                # 自由骑行绝不能下发目标功率：那会让固件进入 ERG、把功率锁死在
-                # 设定值上，20/8 分钟 FTP 测试测出来的就变成"你设的那个数"了。
-                # 重新确认一次阻力档位即可（和 _enter_free_mode 做的事一样）。
-                await self._enter_free_mode()
-            else:
-                await self._send_target_power(self.target_power)
+            await self._reapply_control()
         except TrainerError as exc:
             # 起不来就别假装在跑：状态留在暂停，骑手再点一次"继续"就行。
             # 以前这里也把状态改成 running，结果是计时在走、骑行台还停着。
@@ -657,7 +667,7 @@ class WorkoutSession:
         self.current_speed = None
         self._power_window.clear()
         self._control_window.clear()
-        self._notify("trainer-lost", "骑行台掉线（{}）——训练已挂起，已骑 {}，"
+        self._notify("trainer-lost", "{}——训练已挂起，已骑 {}，"
                      "重新连上骑行台后点「继续」接着骑".format(
                          self.trainer_lost_reason, mmss(self.elapsed_s)))
         return True
@@ -677,6 +687,9 @@ class WorkoutSession:
         # 那句话不再成立，留着会在界面上顶掉"点继续接着骑"的提示；
         # 真还有问题的话，resume() 会立刻报出新的错误。
         self.error_message = None
+        # 这一场还在跑吗？跑着的话（链路半开、断连回调没触发的那些情况）
+        # 接回来之后必须马上重新接管，不能停在"显示在骑、其实没人管"的状态
+        still_running = self.state == STATE_RUNNING
         self._native_probe = None
         self._native_watch.clear()
         self._probe_cooldown_until = 0.0
@@ -690,9 +703,22 @@ class WorkoutSession:
         self._resistance_failures = 0
         self._resistance_blocked = False
         self.last_command_note = "骑行台已重新连接，点「继续」接着骑"
+        # 空档那段时间不能被算进"这一秒骑了多少"——trace 的 dt 是相邻两点的间隔，
+        # 不重置的话接回来之后的第一个点会带上整段空档（分段统计、区间分布、
+        # FTP 的计时段完成度都会跟着虚高）
+        if still_running:
+            self._last_trace = asyncio.get_event_loop().time()
         self._notify("trainer-rebound", "骑行台已重新连接：这场训练还在，"
                      "已骑 {}，点「继续」接着骑".format(mmss(self.elapsed_s)))
         await self._emit()
+        if still_running:
+            try:
+                await self._reapply_control()
+            except TrainerError as exc:
+                # 接管不回来就别让它假装在骑：挂起，等用户点「继续」再试一次
+                self.error_message = str(exc)
+                self.handle_trainer_lost("重新连接后没能重新接管骑行台：{}".format(exc))
+            await self._emit()
 
     def is_unfinished(self) -> bool:
         """这场训练是不是"还没骑完"（可以挂起、等待接回来的那种）。"""

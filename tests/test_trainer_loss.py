@@ -446,6 +446,120 @@ async def test_new_ride_after_loss_is_clean() -> None:
     await with_server(scenario)
 
 
+async def test_silent_link_reconnect_keeps_ride() -> None:
+    """链路半开：台子哑了但**没触发断连回调**，用户直接重连。
+
+    真机上蓝牙半开连接就长这样：断连回调可能几十秒都不来。这条防的是
+    "只修了回调那一条路"——没有回调时也得把训练保住，而不是结束掉；
+    而且接回来之后必须能重新接管（否则界面写着"原生 ERG"，其实一条指令
+    都没下发过，比明确报错更难发现）。
+    """
+    print("\n[7] 链路半开（没触发断连回调）后重连：训练不能丢，控制要能接回来")
+    install_fake_trainer()
+    FakeTrainer.should_fail = False
+
+    async def scenario(http, base, server):
+        reports0 = len(await _reports(http, base))
+        await _connect(http, base)
+        await _start(http, base)
+        feeder = asyncio.ensure_future(_feed_until(server, 1.2))
+        await asyncio.sleep(1.3)
+        await feeder
+        session = server.session
+        elapsed = (await _state(http, base)).get("elapsed_s")
+
+        # 台子哑掉：只是不再推数据，**不发 disconnected 事件**
+        server.trainer.latest = {}
+        server.trainer.last_data_time = 0.0
+        server.trainer.connected = False
+        await asyncio.sleep(0.4)
+        s = await _state(http, base)
+        check(s.get("state") == "running",
+              "没有断连事件时状态仍是 running（程序还不知道台子哑了）",
+              str(s.get("state")))
+
+        # 用户重连
+        await _connect(http, base)
+        s = await _state(http, base)
+        check(server.session is session, "还是同一个会话")
+        check(len(await _reports(http, base)) == reports0,
+              "重连没有写出报告（这一场没被结束）",
+              "{} → {} 份".format(reports0, len(await _reports(http, base))))
+        check(s.get("state") == "paused", "接回来之后是暂停，等用户点「继续」",
+              str(s.get("state")))
+        check(abs((s.get("elapsed_s") or 0) - (elapsed or 0)) < 0.5, "已骑时长保留",
+              "{} → {}".format(elapsed, s.get("elapsed_s")))
+
+        server.trainer.commands.clear()
+        async with http.post(base + "/api/resume", json={}) as r:
+            await r.json()
+        await asyncio.sleep(0.2)
+        s = await _state(http, base)
+        check(s.get("state") == "running", "「继续」之后接着骑", str(s.get("state")))
+        check(("power", 130) in server.trainer.commands,
+              "重新申请了控制权并重新下发了目标功率（不是光显示在骑）",
+              str(server.trainer.commands[:6]))
+        async with http.post(base + "/api/stop", json={}) as r:
+            await r.json()
+
+    await with_server(scenario)
+
+
+async def test_rebind_while_running_reapplies_control() -> None:
+    """rebind_trainer 被用在**还在跑**的会话上时，必须马上重新接管。
+
+    正常路径走不到这里（服务端接回之前一定先挂起），但这是个"以后有人改坏了
+    也不会静默出事"的护栏：新链路的 FTMS 状态是干净的，不重新下发目标功率的话，
+    状态还写着 running、界面写着原生 ERG，实际一条指令都没发出去。
+    """
+    print("\n[8] 会话层：把还在跑的会话接到新链路上，必须重新下发目标")
+    from ibike.session import WorkoutSession
+
+    for erg_mode, label in (("ftms", "原生 ERG"), ("resistance", "闭环阻力")):
+        trainer = FakeTrainer()
+        await trainer.connect()
+        session = WorkoutSession(trainer)
+        new_trainer = None
+        try:
+            await session.start(130, duration_min=60, erg_mode=erg_mode)
+            feeder = asyncio.ensure_future(_feed_session(trainer, 0.4))
+            await asyncio.sleep(0.5)
+            await feeder
+            check(session.state == "running", "{}：会话在跑".format(label), session.state)
+
+            # 换一条链路接回来（模拟"台子断电后重连成功"）
+            new_trainer = FakeTrainer()
+            await new_trainer.connect()
+            await session.rebind_trainer(new_trainer)
+            if erg_mode == "ftms":
+                check(("power", 130) in new_trainer.commands,
+                      "{}：接上之后重新下发了目标功率".format(label),
+                      str(new_trainer.commands[:4]))
+            else:
+                check(session.controller is not None,
+                      "{}：控制器按新链路重新建立（旧的 k/档位不可信）".format(label))
+                check(any(c[0] == "resistance" for c in new_trainer.commands),
+                      "{}：重新下发了一次阻力档位".format(label),
+                      str(new_trainer.commands[:6]))
+            check(session.state == "running",
+                  "{}：接管成功时状态保持 running（不该无谓地停表）".format(label),
+                  session.state)
+            await session.stop()
+        finally:
+            await session.aclose()
+            if new_trainer is not None:
+                await new_trainer.disconnect()
+            await trainer.disconnect()
+
+
+async def _feed_session(trainer, seconds: float) -> None:
+    """在没有服务端的情况下给会话喂数据。"""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        trainer.feed(130.0)
+        await asyncio.sleep(0.05)
+
+
 async def main() -> int:
     print("=" * 70)
     print("骑行台掉线 / 重连测试")
@@ -456,6 +570,8 @@ async def main() -> int:
     await test_failed_reconnect_keeps_ride()
     await test_explicit_disconnect_still_saves()
     await test_new_ride_after_loss_is_clean()
+    await test_silent_link_reconnect_keeps_ride()
+    await test_rebind_while_running_reapplies_control()
 
     print("\n" + "=" * 70)
     if _failures:
