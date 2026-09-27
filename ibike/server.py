@@ -250,6 +250,18 @@ class Server:
         # 跑满时长自然结束不会经过接口。
         if kind == "stopped":
             self._save_report()
+        elif kind == "disconnected":
+            # 骑行台掉线 **不等于** 训练结束。休息的时候台子会自动关机，用户接着
+            # 做的是"回设备页把它重新连上"——那是继续的意思。所以这里只把训练
+            # 挂起（计时冻结、数据留着），等重连时接回去。
+            # 以前这里什么都不做，而重连走的是 _connect_trainer →
+            # _disconnect_trainer，会把还没骑完的训练收尾存成报告：60 分钟的计划
+            # 在 21 分钟处变成一份"提前结束"的报告，而且再也接不回去。
+            session = self.session
+            if session is not None and session.handle_trainer_lost(message):
+                log.warning("骑行台掉线，训练已挂起（未结束）：%s", message)
+                self._snapshot = session.snapshot()
+                self._mark_dirty()
         asyncio.ensure_future(self._broadcast({"type": "event", "data": entry}))
 
     def _save_report(self) -> None:
@@ -271,20 +283,32 @@ class Server:
     # 连接管理
     # ------------------------------------------------------------------
 
-    async def _disconnect_trainer(self) -> None:
-        if self.session is not None:
-            # 训练还没结束就断开（点「断开」、Ctrl+C 关服务、或者改连另一台设备），
-            # 不能把这次训练直接扔掉：aclose() 只取消主循环，不生成总结，
-            # 于是报告不会落盘，骑了半小时的记录就这么没了。
-            # stop() 对 idle/finished 是空操作，重复调用也安全。
-            session = self.session
-            if session.state in (STATE_RUNNING, STATE_PAUSED) or session.elapsed_s > 1.0:
-                try:
-                    await session.stop(reason="断开连接")
-                except Exception:
-                    log.exception("断开前保存训练失败")
-            await session.aclose()
-            self.session = None
+    async def _disconnect_trainer(self, keep_session: bool = False) -> None:
+        """断开骑行台。
+
+        ``keep_session=True`` 用于"重连之前先把旧的设备对象摘掉"：这时训练只是
+        **挂起**，不 stop（stop 会收尾并写报告），数据留在会话里等新设备接回来。
+        默认的 False 是用户的明确意图（点「断开」、关服务），那就照旧把没骑完的
+        训练收尾存成报告。
+        """
+        session = self.session
+        kept = False
+        if session is not None:
+            if keep_session and session.is_unfinished():
+                kept = True
+                session.handle_trainer_lost("骑行台已断开")
+            else:
+                # 训练还没结束就断开（点「断开」、Ctrl+C 关服务、或者改连另一台设备），
+                # 不能把这次训练直接扔掉：aclose() 只取消主循环，不生成总结，
+                # 于是报告不会落盘，骑了半小时的记录就这么没了。
+                # stop() 对 idle/finished 是空操作，重复调用也安全。
+                if session.state in (STATE_RUNNING, STATE_PAUSED) or session.elapsed_s > 1.0:
+                    try:
+                        await session.stop(reason="断开连接")
+                    except Exception:
+                        log.exception("断开前保存训练失败")
+                await session.aclose()
+                self.session = None
         trainer = self.trainer
         self.trainer = None
         if trainer is not None:
@@ -296,14 +320,19 @@ class Server:
         # 归零让它自己慢慢回落到静息心率，否则会停在一个"刚才那个功率"上不动。
         if isinstance(self.hr, SimulatedHeartRate):
             self.hr.set_power(0.0)
-        self._snapshot = {"state": STATE_IDLE}
+        # 保住训练的时候快照要反映"挂起"，不能顺手清成 idle
+        self._snapshot = session.snapshot() if kept else {"state": STATE_IDLE}
         self._mark_dirty()
 
     async def _connect_trainer(self, address: Optional[str] = None,
                                simulator: bool = False,
                                simulator_responds: Optional[bool] = None
                                ) -> Dict[str, Any]:
-        await self._disconnect_trainer()
+        # 还没骑完的训练必须保住：骑行台断电/断链之后重新连接走的正是这条路，
+        # 用户要的是"接着骑"，不是把这场比赛收尾掉。
+        keep = self.session if (self.session is not None
+                                and self.session.is_unfinished()) else None
+        await self._disconnect_trainer(keep_session=keep is not None)
 
         if simulator:
             responds = (self.simulator_responds if simulator_responds is None
@@ -336,24 +365,35 @@ class Server:
             trainer = TrainerClient(on_event=self._on_event)
 
         self.trainer = trainer
-        self.session = WorkoutSession(trainer, on_update=self._on_session_update,
-                                      on_event=self._on_event,
-                                      heart_rate=self.hr)
+        if keep is None:
+            self.session = WorkoutSession(trainer, on_update=self._on_session_update,
+                                          on_event=self._on_event,
+                                          heart_rate=self.hr)
         try:
             await trainer.connect(address or "simulator")
         except Exception:
             # 连接失败必须把半成品清干净。否则会留下一个"看起来连上了、其实不能用"
             # 的状态：trainer/session 都还在，但快照里没有 trainer 字段，
             # 前端因此认为未连接，开始按钮永远是灰的。
-            self.session = None
             self.trainer = None
-            self._snapshot = {"state": STATE_IDLE}
+            if keep is None:
+                self.session = None
+                self._snapshot = {"state": STATE_IDLE}
+            else:
+                # 重连失败不能把挂起的训练弄丢：只是没接上新台子，训练本体的
+                # 数据还在 session 里，用户可以再试一次。
+                self._snapshot = keep.snapshot()
             self._mark_dirty()
             try:
                 await trainer.disconnect()
             except Exception:
                 pass
             raise
+        if keep is not None:
+            await keep.rebind_trainer(trainer)
+            # 心率带是独立外设，但"当前该用哪一根"由服务端持有（模拟模式会换成
+            # 模拟带子）。接回来的会话要用当前这根，别继续用旧的。
+            keep.heart_rate = self.hr
         self._snapshot = self.session.snapshot()
         self._mark_dirty()
         return trainer.state()

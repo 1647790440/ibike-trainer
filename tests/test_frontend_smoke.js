@@ -1165,6 +1165,67 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   check(getEl('sumHrSection').classList.contains('hidden'),
         '没接心率带的那次训练不显示心率区块');
 
+  console.log('\n[11c] 骑行台掉线：界面必须说清"训练还在，去重连"');
+
+  const liveBase = {
+    target_power: 130, duration_s: 3600, elapsed_s: 1315, remaining_s: 2285,
+    progress: 0.37, power: null, power_avg: 128.6, power_max: 174,
+    cadence: null, distance_m: 9844, energy_kj: 169, is_interval: false,
+    plan: [], summary: null,
+  };
+
+  // 掉线挂起：不能在界面上说成"已暂停"——那会让人以为点「继续」就能走
+  context.render(Object.assign({}, liveBase, {
+    state: 'paused', trainer_lost: true,
+    trainer_lost_reason: '与骑行台的连接断开了',
+    trainer: { connected: false, kind: 'ble', capabilities: {} },
+  }));
+  check(getEl('stateBadge').textContent === '骑行台已断开',
+        '徽标写的是「骑行台已断开」而不是「已暂停」', getEl('stateBadge').textContent);
+  check(getEl('note').textContent.indexOf('挂起') >= 0
+        && getEl('note').textContent.indexOf('重新连上骑行台') >= 0,
+        '提示行说明了训练已挂起、去哪重连', getEl('note').textContent.slice(0, 40));
+  check(getEl('btnPause').disabled === true && getEl('btnPause').textContent === '继续',
+        '「继续」是灰的（台子没回来，点了必然失败）');
+  check(!getEl('rideNotice').classList.contains('hidden'),
+        '设备页顶上出现"还有一场训练没骑完"');
+  check(getEl('rideNotice').textContent.indexOf('挂起') >= 0
+        && getEl('rideNotice').textContent.indexOf('接回这场训练') >= 0,
+        '那条提示说明了重连会接回这场训练');
+  check(getEl('livePanel').classList.contains('hidden') === false,
+        '实时面板还在（训练没结束）');
+  check(getEl('summaryPanel').classList.contains('hidden'),
+        '不显示总结面板（训练没结束）');
+
+  // 掉线挂起 + 那一刻攒下的"骑行台未连接"：显示挂起提示，而不是那句没用的错误
+  context.render(Object.assign({}, liveBase, {
+    state: 'paused', trainer_lost: true, error: '骑行台未连接',
+    trainer: { connected: false, kind: 'ble', capabilities: {} },
+  }));
+  check(getEl('note').textContent.indexOf('挂起') >= 0
+        && getEl('note').textContent.indexOf('骑行台未连接') < 0,
+        '残留的「骑行台未连接」不会顶掉"训练已挂起，去重连"',
+        getEl('note').textContent.slice(0, 30));
+
+  // 重连成功、还没点「继续」：还是暂停，但可以继续了
+  context.render(Object.assign({}, liveBase, {
+    state: 'paused', trainer_lost: false,
+    trainer: { connected: true, kind: 'ble', name: 'MOK iBike', capabilities: {} },
+  }));
+  check(getEl('stateBadge').textContent === '已暂停',
+        '重连之后徽标回到「已暂停」', getEl('stateBadge').textContent);
+  check(getEl('btnPause').disabled === false, '「继续」可以点了');
+  check(getEl('btnPause').textContent === '继续', '按钮文案是「继续」',
+        getEl('btnPause').textContent);
+  check(getEl('rideNotice').textContent.indexOf('接回这场训练') >= 0,
+        '设备页仍然提醒"连接会接回这场训练"');
+
+  // 空闲时那条提示必须收起来
+  context.render({ state: 'idle', trainer: { connected: true, kind: 'ble', capabilities: {} },
+                   summary: null, is_interval: false, plan: [] });
+  check(getEl('rideNotice').classList.contains('hidden'),
+        '没有进行中的训练时那条提示收起');
+
   console.log('\n' + '='.repeat(66));
   if (failures) {
     console.log(`\x1b[31m✘\x1b[0m 失败 ${failures} 项`);

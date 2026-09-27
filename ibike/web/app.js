@@ -28,7 +28,7 @@ const els = {
   mHrZone: $('mHrZone'),
   targetPower: $('targetPower'), powerSlider: $('powerSlider'),
   duration: $('duration'), ergMode: $('ergMode'), modeHint: $('modeHint'),
-  btnStart: $('btnStart'), startHint: $('startHint'),
+  btnStart: $('btnStart'), startHint: $('startHint'), rideNotice: $('rideNotice'),
   constantFields: $('constantFields'), intervalFields: $('intervalFields'),
   customFields: $('customFields'), ftpBlock: $('ftpBlock'), ftpHint: $('ftpHint'),
   ftpInput: $('ftpInput'), templateList: $('templateList'), templateDesc: $('templateDesc'),
@@ -295,12 +295,30 @@ function render(s) {
   renderFoundLists(false);
 
   const running = s.state === 'running' || s.state === 'paused';
+  // 骑行台掉线：训练挂起等着接回来（见 session.handle_trainer_lost）。
+  // "已暂停"和"台子没了"在界面上必须分开说——后者要去设备页重连。
+  const trainerLost = !!s.trainer_lost;
   const showLive = running || s.state === 'error';
   const hasSummary = !!s.summary;
   // 刚结束的训练总结，和用户在报告列表里点开的历史报告，共用同一块面板渲染
   const showingSummary = hasSummary || !!viewingReport;
 
   renderConnChips(s);
+
+  // 设备页顶上那条"还有一场训练没骑完"。它独立于当前在哪个页签——
+  // 用户正是因为台子掉线才跑到设备页来的，这里必须告诉他训练没丢。
+  if (els.rideNotice) {
+    els.rideNotice.classList.toggle('hidden', !running);
+    if (running) {
+      els.rideNotice.textContent = trainerLost
+        ? '⚠ 有一场训练正在进行，但骑行台掉线了，训练已挂起（已骑 '
+          + fmtClock(s.elapsed_s) + '）。在下面重新连上骑行台，它会接回这场训练，'
+          + '然后回「2 训练」点「继续」接着骑。'
+        : '有一场训练正在进行（' + (s.state === 'paused' ? '已暂停' : '进行中')
+          + '，已骑 ' + fmtClock(s.elapsed_s) + '）。在这里连接骑行台会接回这场训练；'
+          + '点「断开」则会结束并保存它。';
+    }
+  }
 
   // 训练一开始（或从别的设备/标签页开起来）就切到训练页：骑行中用户要看的是
   // 功率和倒计时，不是设备列表。手动切回去也允许，这里只在"进入骑行"那一刻切一次。
@@ -342,7 +360,8 @@ function render(s) {
     running: ['进行中', ''], paused: ['已暂停', 'badge-paused'],
     finished: ['已完成', ''], error: ['出错', 'badge-paused'],
   };
-  const [label, cls] = badges[s.state] || ['—', ''];
+  let [label, cls] = badges[s.state] || ['—', ''];
+  if (trainerLost && running) [label, cls] = ['骑行台已断开', 'badge-paused'];
   els.stateBadge.textContent = label;
   els.stateBadge.className = 'badge ' + cls;
   setText(els.modeBadge, s.erg_mode_label || '—');
@@ -475,14 +494,22 @@ function render(s) {
   }
 
   els.btnPause.textContent = s.state === 'paused' ? '继续' : '暂停';
-  els.btnPause.disabled = s.state === 'finished' || s.state === 'error';
+  // 骑行台还没接回来"继续"必然失败（服务端会回一句"骑行台未连接"），
+  // 与其让人点了再吃一个错误，不如直接灰掉并说清去哪儿连。
+  els.btnPause.disabled = s.state === 'finished' || s.state === 'error'
+    || (s.state === 'paused' && (trainerLost || !connected));
 
   // 提示行
   let note = s.command_note || '';
-  if (s.error) note = '⚠ ' + s.error;
+  // 顺序有讲究：掉线挂起时，台账上往往还留着掉线那一瞬间攒下的
+  // "⚠ 骑行台未连接"，它会顶掉这条真正该做的事——去重连。
+  if (trainerLost) {
+    note = '⚠ 骑行台掉线了，训练已经挂起（计时停住了，已骑 ' + fmtClock(s.elapsed_s)
+      + '）。到「1 连接设备」重新连上骑行台，再回来点「继续」接着骑。';
+  } else if (s.error) note = '⚠ ' + s.error;
   else if (s.stale_data) note = '⚠ 已经有一阵子没收到骑行台数据了，检查一下它是否还在连接状态';
   setText(els.note, note || '—');
-  els.note.classList.toggle('warn', !!(s.error || s.stale_data));
+  els.note.classList.toggle('warn', !!(s.error || s.stale_data || trainerLost));
 
   // 图表
   const now = Date.now();
@@ -2115,11 +2142,22 @@ async function doConnect(payload) {
     const res = await api('/api/connect', payload);
     // 直接用连接接口返回的状态刷新界面，不等 WebSocket——这样即使 WS 不通，
     // 按钮也能立刻变成可点状态
+    const st = res.state || {};
+    const resumed = st.state === 'running' || st.state === 'paused';
     if (res.state) render(res.state);
     els.deviceList.innerHTML = '';
-    els.scanHint.textContent = '已连接。设定目标功率和时长，然后开始。';
-    showBanner('已连接骑行台，可以设定目标并开始训练了。', 'info');
-    logLine('connected', '已连接 ' + ((res.trainer || {}).name || payload.address || '模拟设备'));
+    if (resumed) {
+      // 骑行台掉线后重连：服务端把这场训练接回来了，不是开了一场新的
+      els.scanHint.textContent = '已重新连接，这场训练还在（已骑 '
+        + fmtClock(st.elapsed_s) + '）。回「2 训练」点「继续」接着骑。';
+      showBanner('骑行台已重新连接，这场训练还在——回「2 训练」点「继续」接着骑。', 'info');
+      switchView('training');
+      logLine('connected', '骑行台已重连，接回进行中的训练');
+    } else {
+      els.scanHint.textContent = '已连接。设定目标功率和时长，然后开始。';
+      showBanner('已连接骑行台，可以设定目标并开始训练了。', 'info');
+      logLine('connected', '已连接 ' + ((res.trainer || {}).name || payload.address || '模拟设备'));
+    }
   } catch (err) {
     toast('连接失败：' + err.message);
     els.scanHint.textContent = '连接失败，请重试或换一台设备。';
@@ -2136,6 +2174,15 @@ els.btnSim.addEventListener('click', () => {
 const SCAN_HINT_IDLE = '骑行台通上电、踩两圈唤醒它，再点扫描。';
 
 els.btnDisconnect.addEventListener('click', async () => {
+  // 训练还没结束的时候，「断开」会在服务端把这场训练收尾并写成报告。
+  // 这条以前是静默发生的：手一滑就把还没骑完的训练结束了。先问一句。
+  const inRide = state && (state.state === 'running' || state.state === 'paused');
+  if (inRide && !window.confirm('现在还有一场训练没结束（已骑 '
+      + fmtClock(state.elapsed_s) + '）。断开骑行台会**结束并保存**这场训练，'
+      + '确定吗？\n\n只是想让它挂起等重连的话，直接在上面扫描并连上骑行台就行，'
+      + '不用先断开。')) {
+    return;
+  }
   try {
     await api('/api/disconnect', {});
     logLine('info', '已断开');
@@ -2296,7 +2343,9 @@ function renderTrainerBlock(s) {
     ? '--' : (s.resistance_raw / 10).toFixed(1));
 
   if (!connected) {
-    els.trainerHint.textContent = '还没连接。在上面扫描，然后点列表里的骑行台。';
+    els.trainerHint.textContent = s && s.trainer_lost
+      ? '骑行台掉线了（训练已挂起，没丢）。在上面重新扫描并连接，会把这场训练接回来。'
+      : '还没连接。在上面扫描，然后点列表里的骑行台。';
   } else if (s.stale_data) {
     els.trainerHint.textContent = '已连接，但有一阵子没收到数据了——检查它是不是休眠了、'
       + '或者被手机抢走了连接。';

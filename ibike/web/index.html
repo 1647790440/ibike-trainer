@@ -48,6 +48,11 @@
     <p id="scanHint" class="hint">骑行台通上电、踩两圈唤醒它；心率带戴上（电极沾点水）。
       点一次扫描，骑行台和心率带会一起找出来，点一下就能连。</p>
 
+    <!-- 有训练还没骑完（暂停中、或者骑行台掉线挂起了）时的提示。
+         没有它的话，用户在这个页面看到的就是"未连接 + 一个扫描按钮"，很容易以为
+         那场训练已经没了。 -->
+    <p id="rideNotice" class="hint ride-notice hidden"></p>
+
     <div id="foundBlock" class="found-block hidden">
       <div class="found-group">
         <h3 class="found-title">找到的骑行台</h3>

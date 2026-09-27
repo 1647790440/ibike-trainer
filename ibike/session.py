@@ -94,6 +94,12 @@ RAMP_MIN_STEPS = 3              # 至少要踩过这么多级才算一次有效�
 DEFAULT_FREE_RESISTANCE = 90
 
 
+def mmss(seconds: float) -> str:
+    """把秒数写成 "21:55"。通知文本里写"已骑 1315 秒"没人愿意自己换算。"""
+    total = int(max(0.0, seconds))
+    return "{}:{:02d}".format(total // 60, total % 60)
+
+
 class ResistancePowerController:
     """在只能设阻力的骑行台上，用自适应闭环把功率压到目标值。
 
@@ -331,6 +337,11 @@ class WorkoutSession:
         self._native_probe: Optional[Dict[str, Any]] = None
         self._probe_cooldown_until = 0.0
         self._distance_accum = 0.0
+        # 骑行台掉线（断电、蓝牙断链、被别的 App 抢走）之后的"挂起"标志。
+        # 见 handle_trainer_lost：掉线**不等于**训练结束，训练要能挂在这儿等
+        # 骑行台回来接着骑。
+        self.trainer_lost = False
+        self.trainer_lost_reason = ""
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -421,6 +432,8 @@ class WorkoutSession:
         self.error_message = None
         self.no_data_since = None
         self._stale = False
+        self.trainer_lost = False
+        self.trainer_lost_reason = ""
         self._native_watch.clear()
         self._native_probe = None
         self._probe_cooldown_until = 0.0
@@ -609,6 +622,82 @@ class WorkoutSession:
         self._notify("resumed", "继续训练")
         await self._emit()
 
+    def handle_trainer_lost(self, reason: str = "") -> bool:
+        """骑行台掉线：把这场训练**挂起**，但绝不结束它。
+
+        为什么必须是"挂起"而不是"结束"：动感单车/骑行台在骑手休息几分钟后会
+        自动关机，蓝牙链路随之断掉。用户接着做的是"回到设备页重新连上它"——
+        那是**继续**的意思，不是"这场训练我不要了"。
+
+        以前掉线之后什么都不做（计时照跑），而重连要走 _connect_trainer →
+        _disconnect_trainer，那条路会把还没骑完的训练直接收尾存成报告。于是
+        实际发生了什么：暂停休息 → 台子自动关机 → 回来重连 → 训练已经结束了，
+        60 分钟的计划在 21 分钟处变成一份"提前结束"的报告。
+
+        这里冻结计时（掉线期间没有功率可信，让秒表继续走等于把休息时间算成骑行），
+        数据、曲线、心率累计全部原样留着，等 rebind_trainer 接回来。
+
+        同步方法：它由蓝牙的断连回调直接调用，那里没有 await 的机会。
+        返回 True 表示这次确实从"在骑/暂停"变成了"挂起"。
+        """
+        if not self.is_unfinished():
+            return False
+        # 已经挂起过就别重复报一遍（掉线回调可能来两次）
+        if self.trainer_lost and self.state == STATE_PAUSED:
+            return False
+        if self.state == STATE_RUNNING:
+            self.state = STATE_PAUSED
+        self.trainer_lost = True
+        self.trainer_lost_reason = reason or "与骑行台的连接断开了"
+        # 链路断了，正在进行的降级探测不再可信（阶跃响应的"没反应"只是台子没了）
+        self._native_probe = None
+        self._stale = True
+        self.current_power = None
+        self.current_cadence = None
+        self.current_speed = None
+        self._power_window.clear()
+        self._control_window.clear()
+        self._notify("trainer-lost", "骑行台掉线（{}）——训练已挂起，已骑 {}，"
+                     "重新连上骑行台后点「继续」接着骑".format(
+                         self.trainer_lost_reason, mmss(self.elapsed_s)))
+        return True
+
+    async def rebind_trainer(self, trainer: Any) -> None:
+        """把一台**新连上**的骑行台接回这场还没结束的训练。
+
+        只换设备对象和"与旧链路绑定"的标定，训练本体（已骑时长、曲线、心率
+        累计、做功、区间）一律原样保留——用户要的是接着骑完，不是重新骑。
+        FTMS 侧的状态一律不在这里碰：控制权要重新申请、目标功率要重新下发，
+        这些等用户点「继续」时由 resume() 统一做（那时台子才真的就绪）。
+        """
+        self.trainer = trainer
+        self.trainer_lost = False
+        self.trainer_lost_reason = ""
+        # 掉线那会儿一定会攒下一句"骑行台未连接/下发指令失败"。链路已经换了，
+        # 那句话不再成立，留着会在界面上顶掉"点继续接着骑"的提示；
+        # 真还有问题的话，resume() 会立刻报出新的错误。
+        self.error_message = None
+        self._native_probe = None
+        self._native_watch.clear()
+        self._probe_cooldown_until = 0.0
+        self._last_keepalive = 0.0
+        self._last_resistance_adj = 0.0
+        self._stale = True
+        # 闭环控制器的 level_raw / k 标定是"这台设备的这条链路"上测出来的。
+        # 台子断过电之后阻力多半已经回到 0，拿旧标定继续调会先拧到错误的位置，
+        # 所以丢掉重来（resume 时会重新 seed）。
+        self.controller = None
+        self._resistance_failures = 0
+        self._resistance_blocked = False
+        self.last_command_note = "骑行台已重新连接，点「继续」接着骑"
+        self._notify("trainer-rebound", "骑行台已重新连接：这场训练还在，"
+                     "已骑 {}，点「继续」接着骑".format(mmss(self.elapsed_s)))
+        await self._emit()
+
+    def is_unfinished(self) -> bool:
+        """这场训练是不是"还没骑完"（可以挂起、等待接回来的那种）。"""
+        return self.state in (STATE_RUNNING, STATE_PAUSED)
+
     async def stop(self, reason: str = "用户停止") -> None:
         # 先落状态再做别的。stop() 里要等骑行台应答（可能几百毫秒到 2.5 秒），
         # 这个窗口里如果再来一次 stop，会看到 state 还是 running 而重复下发 STOP；
@@ -616,6 +705,10 @@ class WorkoutSession:
         if self.state in (STATE_IDLE, STATE_FINISHED):
             return
         self.state = STATE_FINISHED
+        # 结束之后就不存在"等骑行台回来"这回事了，摘掉挂起标志
+        # （总结面板不该顶着一句"骑行台已断开，点继续"）
+        self.trainer_lost = False
+        self.trainer_lost_reason = ""
         self.finished_at = time.time()
 
         await self._cancel_task()
@@ -700,6 +793,8 @@ class WorkoutSession:
         self.no_data_since = None
         self._stale = False
         self.error_message = None
+        self.trainer_lost = False
+        self.trainer_lost_reason = ""
         await self._emit()
 
     # ------------------------------------------------------------------
@@ -1452,7 +1547,7 @@ class WorkoutSession:
         if self.active_erg_mode == ERG_RESISTANCE:
             pass                      # 闭环控制器下一拍自己会跟过去
         elif self.active_erg_mode == ERG_FTMS:
-            asyncio.ensure_future(self._send_target_power(self.target_power))
+            self._send_target_power_bg(self.target_power)
         elif self.active_erg_mode == ERG_FREE:
             # 自由骑行不控功率，能量化地"降强度"做不到，只能提示
             self._notify("hr-limit", "心率超过上限 {}bpm，建议降低配速".format(
@@ -2002,6 +2097,22 @@ class WorkoutSession:
     async def _send_target_power(self, watts: float) -> None:
         await self.trainer.set_target_power(int(round(watts)))
 
+    def _send_target_power_bg(self, watts: float) -> None:
+        """后台补发目标功率，失败只记一笔。
+
+        这里没有调用方可以接住异常：以前直接 ensure_future(_send_target_power())
+        的话，骑行台正好在这一刻掉线就会留下一个"Task exception was never
+        retrieved"——训练还在跑，日志里却出现一堆没人管的异常。
+        """
+        async def run() -> None:
+            try:
+                await self._send_target_power(watts)
+            except TrainerError as exc:
+                self.error_message = str(exc)
+            except Exception:
+                log.exception("后台补发目标功率失败")
+        asyncio.ensure_future(run())
+
     # ------------------------------------------------------------------
     # 对外状态
     # ------------------------------------------------------------------
@@ -2091,6 +2202,10 @@ class WorkoutSession:
             "command_note": self.last_command_note,
             "error": self.error_message,
             "stale_data": self._stale,
+            # 骑行台掉线、训练挂起等重连（见 handle_trainer_lost）。
+            # 前端靠它把"已暂停"和"台子没了，去重连"区分开。
+            "trainer_lost": bool(self.trainer_lost),
+            "trainer_lost_reason": self.trainer_lost_reason,
             "sampled_s": round(self._sampled_s, 1),
             "summary": self.summary,
             # ---- 间歇训练 ----
