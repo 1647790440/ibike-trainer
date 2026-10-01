@@ -97,6 +97,23 @@ DEFAULT_FREE_RESISTANCE = 90
 POWER_IDLE_CADENCE = 2.0
 POWER_IDLE_MAX_W = 20.0
 
+# ---- 自动暂停 ----
+# 停下来接个电话、喝口水、站起来揉揉屁股的时候，秒表不该继续走。判据是"确实
+# 没在输出"：功率和踏频**都**接近 0，持续 AUTO_PAUSE_HOLD_S 秒。
+#
+# 用与（AND）而不是或：自由骑行里骑行台已经放开了阻力，可能"在踩但只有几瓦"，
+# 只看功率会把它误判成没在骑；只看踏频又会把"溜车"当成在骑。
+_AUTO_PAUSE_HOLD_S = 15.0       # 连续这么久没有输出就暂停
+_AUTO_PAUSE_POWER_W = 5.0       # "没有输出"的功率门限
+_AUTO_PAUSE_CADENCE = 5.0       # 以及踏频门限
+# 自动继续：踩起来要连续 AUTO_RESUME_HOLD_S 秒才算数（碰一下曲柄不该开表）。
+# 判据优先用踏频而不是功率——暂停时骑行台已经放开了阻力，重新踩起来那几秒
+# 功率可能还不到 20W，光等功率会出现"永远不自动继续"。
+_AUTO_RESUME_CADENCE = 40.0
+_AUTO_RESUME_POWER_W = 20.0     # 固件不报踏频时的退路
+_AUTO_RESUME_HOLD_S = 3.0
+_AUTO_RESUME_RETRY_S = 10.0     # 自动继续失败后的重试间隔（别每 0.1 秒撞一次）
+
 
 def mmss(seconds: float) -> str:
     """把秒数写成 "21:55"。通知文本里写"已骑 1315 秒"没人愿意自己换算。"""
@@ -227,6 +244,17 @@ class WorkoutSession:
     PROBE_WAIT_S = _NATIVE_PROBE_WAIT_S
     PROBE_COOLDOWN_S = _NATIVE_PROBE_COOLDOWN_S
 
+    # 自动暂停/继续。做成类属性同样是为了让测试能压缩时间轴（不必真等 15 秒）；
+    # AUTO_PAUSE_ENABLED 设成 False 就退回"秒表一直走"的老行为。
+    AUTO_PAUSE_ENABLED = True
+    AUTO_PAUSE_HOLD_S = _AUTO_PAUSE_HOLD_S
+    AUTO_PAUSE_POWER_W = _AUTO_PAUSE_POWER_W
+    AUTO_PAUSE_CADENCE = _AUTO_PAUSE_CADENCE
+    AUTO_RESUME_CADENCE = _AUTO_RESUME_CADENCE
+    AUTO_RESUME_POWER_W = _AUTO_RESUME_POWER_W
+    AUTO_RESUME_HOLD_S = _AUTO_RESUME_HOLD_S
+    AUTO_RESUME_RETRY_S = _AUTO_RESUME_RETRY_S
+
     def __init__(self, trainer: Any,
                  on_update: Optional[Callable[[Dict[str, Any]], None]] = None,
                  on_event: Optional[Callable[[str, str], None]] = None,
@@ -346,6 +374,12 @@ class WorkoutSession:
         # 骑行台回来接着骑。
         self.trainer_lost = False
         self.trainer_lost_reason = ""
+        # 自动暂停（见 pause(auto=True)）：只有**自动**暂停才允许自动继续，
+        # 手动按下的暂停是"我就是要停着"，踩两下不该把它顶掉。
+        self.auto_paused = False
+        self._zero_since: Optional[float] = None      # 从什么时候开始"没在踩"
+        self._pedal_since: Optional[float] = None     # 从什么时候开始"又踩起来了"
+        self._auto_resume_block_until = 0.0           # 自动继续失败后的重试冷却
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -438,6 +472,10 @@ class WorkoutSession:
         self._stale = False
         self.trainer_lost = False
         self.trainer_lost_reason = ""
+        self.auto_paused = False
+        self._zero_since = None
+        self._pedal_since = None
+        self._auto_resume_block_until = 0.0
         self._native_watch.clear()
         self._native_probe = None
         self._probe_cooldown_until = 0.0
@@ -574,17 +612,30 @@ class WorkoutSession:
             return "自由骑行"
         return "未知"
 
-    async def pause(self) -> None:
+    async def pause(self, auto: bool = False) -> None:
         if self.state != STATE_RUNNING:
             return
         # 暂停会打断探测的连续性（功率必然掉到 0），结论不可信，作废
         self._native_probe = None
         self.state = STATE_PAUSED
-        try:
-            await self.trainer.pause()
-        except Exception as exc:
-            log.warning("暂停指令下发失败：%s", exc)
-        self._notify("paused", "已暂停")
+        # 自动暂停和手动暂停要分开记：只有自动暂停才允许自动继续
+        self.auto_paused = bool(auto)
+        self._zero_since = None
+        self._pedal_since = None
+        # 自动暂停**不动骑行台**（软暂停）。下发暂停指令会让固件放开阻力、
+        # 有些固件还会顺带停推 Indoor Bike Data——那样就再也收不到踏频，
+        # "骑手回来了"永远检测不到，自动继续就成了空话。停表这件事本来也只需要
+        # 程序自己知道；手动暂停才需要让台子松开。
+        if not auto:
+            try:
+                await self.trainer.pause()
+            except Exception as exc:
+                log.warning("暂停指令下发失败：%s", exc)
+        if auto:
+            self._notify("auto-pause", "检测到没在踩（功率和踏频都归零 {:.0f} 秒），"
+                         "已自动暂停；重新踩起来会自动继续".format(self.AUTO_PAUSE_HOLD_S))
+        else:
+            self._notify("paused", "已暂停")
         await self._emit()
 
     async def _reapply_control(self) -> None:
@@ -606,7 +657,7 @@ class WorkoutSession:
         else:
             await self._send_target_power(self.target_power)
 
-    async def resume(self) -> None:
+    async def resume(self, auto: bool = False) -> None:
         if self.state != STATE_PAUSED:
             return
         try:
@@ -616,6 +667,11 @@ class WorkoutSession:
             # 以前这里也把状态改成 running，结果是计时在走、骑行台还停着。
             self.error_message = str(exc)
             self._notify("resume-failed", "继续失败：{}".format(exc))
+            if auto:
+                # 自动继续失败要有冷却，否则每个 tick（0.1 秒）都会再撞一次
+                self._pedal_since = None
+                self._auto_resume_block_until = (
+                    asyncio.get_event_loop().time() + self.AUTO_RESUME_RETRY_S)
             await self._emit()
             return
 
@@ -633,8 +689,69 @@ class WorkoutSession:
         # 时长、区间分布、甚至 FTP 测试的"计时段完成度"全都会虚高。
         self._last_trace = now
         self._last_resistance_adj = now
-        self._notify("resumed", "继续训练")
+        self.auto_paused = False
+        self._zero_since = None
+        self._pedal_since = None
+        self._notify("resumed", "重新踩起来了，已自动继续" if auto else "继续训练")
         await self._emit()
+
+    def _no_output(self) -> bool:
+        """这一刻骑手是不是"确实没在输出"（功率和踏频都接近 0）。
+
+        两个都用"与"：只要还有一样明显不为零，就当他还在骑/还在溜车，不动秒表。
+        """
+        power_quiet = (self.current_power is None
+                       or self.current_power <= self.AUTO_PAUSE_POWER_W)
+        cadence_quiet = (self.current_cadence is None
+                         or self.current_cadence <= self.AUTO_PAUSE_CADENCE)
+        return power_quiet and cadence_quiet
+
+    async def _maybe_auto_pause(self, now: float) -> bool:
+        """"没在输出"持续够久就转成暂停。返回 True 表示刚暂停。
+
+        注意：**统计从"没在输出"的第一刻就停止累计**（见主循环），这里只负责
+        在确认"不是抖动"之后把状态标成暂停、发事件。所以每次自动暂停不会在报告里
+        留下一段 0W——正是这个功能要消灭的东西。
+
+        数据陈旧时不走这条路：那是"骑行台没在说话"，不是"骑手没在踩"，交给
+        掉线/挂起那条逻辑处理。坡道测试也不走：它有自己的力竭判据。
+        """
+        if self._zero_since is None:
+            self._zero_since = now
+            return False
+        if now - self._zero_since < self.AUTO_PAUSE_HOLD_S:
+            return False
+        await self.pause(auto=True)
+        return True
+
+    async def _maybe_auto_resume(self, now: float) -> bool:
+        """踩起来就把训练接着开。返回 True 表示刚恢复。
+
+        只对**自动**暂停生效。手动按下的暂停、骑行台掉线挂起都必须等用户自己点
+        「继续」——踩两下就自动跑起来，那不是用户要的。
+        """
+        if not self.auto_paused or self._stale:
+            self._pedal_since = None
+            return False
+        if now < self._auto_resume_block_until:
+            return False
+        cadence = self.current_cadence
+        if cadence is not None:
+            pedaling = cadence >= self.AUTO_RESUME_CADENCE
+        else:
+            # 固件不报踏频时的退路：只能看功率
+            pedaling = (self.current_power is not None
+                        and self.current_power >= self.AUTO_RESUME_POWER_W)
+        if not pedaling:
+            self._pedal_since = None
+            return False
+        if self._pedal_since is None:
+            self._pedal_since = now
+            return False
+        if now - self._pedal_since < self.AUTO_RESUME_HOLD_S:
+            return False
+        await self.resume(auto=True)
+        return self.state == STATE_RUNNING
 
     def handle_trainer_lost(self, reason: str = "") -> bool:
         """骑行台掉线：把这场训练**挂起**，但绝不结束它。
@@ -663,6 +780,10 @@ class WorkoutSession:
             self.state = STATE_PAUSED
         self.trainer_lost = True
         self.trainer_lost_reason = reason or "与骑行台的连接断开了"
+        # 挂起 ≠ 自动暂停：骑行台都没了，绝不允许"踩起来自动继续"
+        self.auto_paused = False
+        self._pedal_since = None
+        self._zero_since = None
         # 链路断了，正在进行的降级探测不再可信（阶跃响应的"没反应"只是台子没了）
         self._native_probe = None
         self._stale = True
@@ -739,6 +860,9 @@ class WorkoutSession:
         # （总结面板不该顶着一句"骑行台已断开，点继续"）
         self.trainer_lost = False
         self.trainer_lost_reason = ""
+        self.auto_paused = False
+        self._zero_since = None
+        self._pedal_since = None
         self.finished_at = time.time()
 
         await self._cancel_task()
@@ -825,6 +949,10 @@ class WorkoutSession:
         self.error_message = None
         self.trainer_lost = False
         self.trainer_lost_reason = ""
+        self.auto_paused = False
+        self._zero_since = None
+        self._pedal_since = None
+        self._auto_resume_block_until = 0.0
         await self._emit()
 
     # ------------------------------------------------------------------
@@ -1290,12 +1418,32 @@ class WorkoutSession:
                 self._ingest_trainer_data(now, dt)
 
                 if self.state == STATE_PAUSED:
+                    # 自动暂停之后，踩起来就自动接着骑（手动暂停不走这条路）
+                    await self._maybe_auto_resume(now)
                     await self._emit()
                     continue
                 if self.state != STATE_RUNNING:
                     # 已经结束或被丢弃了，循环该退出。留在这儿空转没有意义，
                     # 而且它会在下一次训练时和新循环一起向骑行台发指令。
                     return
+
+                # 功率和踏频都归零 = 没在骑：这一刻起一秒都不往统计里记。
+                # 注意"停止累计"和"标记为暂停"是两件事：确认"不是抖动"要等满
+                # AUTO_PAUSE_HOLD_S，但记账当场就停——否则每次自动暂停都会在报告里
+                # 留下十几秒的 0W，那正是这个功能要消灭的东西。
+                # 坡道测试不受影响：它有自己的力竭判据（踏频掉到 50 以下 3 秒），
+                # 踩不动了仍然会正常结束成"力竭"。
+                if (self.AUTO_PAUSE_ENABLED and not self._is_ramp_test
+                        and not self._stale and self._no_output()):
+                    await self._maybe_auto_pause(now)
+                    await self._emit()
+                    continue
+                if self._zero_since is not None:
+                    # 又踩起来了。空档那段时间没被累计，但 trace 的 dt 是相邻两点的
+                    # 间隔——不重置的话，恢复后的第一个点会带上整段空档
+                    # （分段统计、区间分布、FTP 计时段完成度都会跟着虚高）
+                    self._last_trace = now
+                    self._zero_since = None
 
                 self.elapsed_s += dt
                 self.active_s += dt
@@ -2249,6 +2397,9 @@ class WorkoutSession:
             # 前端靠它把"已暂停"和"台子没了，去重连"区分开。
             "trainer_lost": bool(self.trainer_lost),
             "trainer_lost_reason": self.trainer_lost_reason,
+            # 自动暂停中（踩起来会自动继续）。前端用它把提示写清楚：
+            # "已暂停"和"没在踩所以自动停了"对用户是两件事。
+            "auto_paused": bool(self.auto_paused),
             "sampled_s": round(self._sampled_s, 1),
             "summary": self.summary,
             # ---- 间歇训练 ----

@@ -1220,6 +1220,20 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   check(getEl('rideNotice').textContent.indexOf('接回这场训练') >= 0,
         '设备页仍然提醒"连接会接回这场训练"');
 
+  // 自动暂停：不是用户按的，提示必须说清"踩起来会自动继续"
+  context.render(Object.assign({}, liveBase, {
+    state: 'paused', auto_paused: true,
+    trainer: { connected: true, kind: 'ble', name: 'MOK iBike', capabilities: {} },
+  }));
+  check(getEl('note').textContent.indexOf('没在踩') >= 0
+        && getEl('note').textContent.indexOf('自动继续') >= 0,
+        '自动暂停时提示写清了原因和"踩起来会自动继续"',
+        getEl('note').textContent.slice(0, 34));
+  check(getEl('btnPause').disabled === false && getEl('btnPause').textContent === '继续',
+        '自动暂停时「继续」仍然可点（不强制等自动继续）');
+  check(getEl('stateBadge').textContent === '已暂停',
+        '自动暂停也用「已暂停」徽标', getEl('stateBadge').textContent);
+
   // 空闲时那条提示必须收起来
   context.render({ state: 'idle', trainer: { connected: true, kind: 'ble', capabilities: {} },
                    summary: null, is_interval: false, plan: [] });

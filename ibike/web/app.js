@@ -506,6 +506,10 @@ function render(s) {
   if (trainerLost) {
     note = '⚠ 骑行台掉线了，训练已经挂起（计时停住了，已骑 ' + fmtClock(s.elapsed_s)
       + '）。到「1 连接设备」重新连上骑行台，再回来点「继续」接着骑。';
+  } else if (s.auto_paused) {
+    // 自动暂停：不是用户按的，得说清"踩起来就会自动继续"，否则会以为自己被卡住了
+    note = '检测到没在踩，已自动暂停（秒表停住了，已骑 ' + fmtClock(s.elapsed_s)
+      + '）。重新踩起来会自动继续，也可以直接点「继续」。';
   } else if (s.error) note = '⚠ ' + s.error;
   else if (s.stale_data) note = '⚠ 已经有一阵子没收到骑行台数据了，检查一下它是否还在连接状态';
   setText(els.note, note || '—');
