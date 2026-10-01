@@ -552,6 +552,48 @@ async def test_rebind_while_running_reapplies_control() -> None:
             await trainer.disconnect()
 
 
+async def test_impossible_power_frame_is_dropped() -> None:
+    """踏频 0 却报出功率：物理上不可能，必须当无效帧丢掉。
+
+    实测：135W 的骑行里，骑手突然停踩的那一瞬间固件甩出过一帧 273W/0rpm，
+    它把报告的「最大功率」直接顶到 273W。真冲刺（273W 配 85rpm）不能一起筛掉。
+    """
+    print("\n[9] 0rpm 却报功率的假帧要丢掉，但有踏频的真冲刺要保留")
+    from ibike.session import WorkoutSession
+
+    trainer = FakeTrainer()
+    await trainer.connect()
+    session = WorkoutSession(trainer)
+    try:
+        await session.start(135, duration_min=10, erg_mode="ftms")
+        await _feed_session(trainer, 1.0)
+        base_max = session.max_power
+        check(120 <= base_max <= 145, "正常骑行时最大功率是真实的",
+              "{:.0f}W".format(base_max))
+
+        # 假帧：0 rpm 却报 273W
+        trainer.latest = {"power_w": 273.0, "cadence_rpm": 0.0, "speed_kmh": 22.0}
+        trainer.last_data_time = time.monotonic()
+        await asyncio.sleep(0.3)
+        check(session.max_power < 200,
+              "0rpm 的 273W 没有进「最大功率」",
+              "{:.0f}W".format(session.max_power))
+        check(session.current_power is None, "假帧期间当前功率按无效处理",
+              str(session.current_power))
+
+        # 真冲刺：同样的 273W，但有踏频 → 必须采用
+        trainer.latest = {"power_w": 273.0, "cadence_rpm": 85.0, "speed_kmh": 30.0}
+        trainer.last_data_time = time.monotonic()
+        await asyncio.sleep(0.3)
+        check(session.max_power >= 270,
+              "有踏频的 273W 照常采用（别把真冲刺一起筛掉）",
+              "{:.0f}W".format(session.max_power))
+        await session.stop()
+    finally:
+        await session.aclose()
+        await trainer.disconnect()
+
+
 async def _feed_session(trainer, seconds: float) -> None:
     """在没有服务端的情况下给会话喂数据。"""
     end = time.monotonic() + seconds
@@ -572,6 +614,7 @@ async def main() -> int:
     await test_new_ride_after_loss_is_clean()
     await test_silent_link_reconnect_keeps_ride()
     await test_rebind_while_running_reapplies_control()
+    await test_impossible_power_frame_is_dropped()
 
     print("\n" + "=" * 70)
     if _failures:

@@ -299,6 +299,24 @@ async def test_summary_end_to_end() -> None:
                   "轨迹带上了功率、目标、阻力、踏频和心率",
                   str(sorted(trace[0].keys())) if trace else "无")
 
+            # 报告里要带上这场训练的事件。事后复盘最缺的恰恰不是数字，而是
+            # "报告里那两段空白到底是用户按了暂停，还是骑行台掉线挂起了"——
+            # 只看曲线和统计答不出来，只能回头问用户。
+            reports = server.reports.list()
+            if check(len(reports) >= 1, "训练报告已经落盘"):
+                full = server.reports.get(reports[0]["id"]) or {}
+                ev = (full.get("summary") or {}).get("events")
+                check(isinstance(ev, list) and len(ev) >= 2,
+                      "报告里带了这场训练的事件",
+                      str([e.get("kind") for e in (ev or [])]))
+                check(all("at" in e and "kind" in e for e in (ev or [])),
+                      "事件带相对时刻（秒）和类型")
+                check(any(e.get("kind") == "started" for e in (ev or [])),
+                      "有 started 事件")
+                check(all(0 <= e["at"] <= s.get("actual_s", 0) + 60 for e in (ev or [])),
+                      "事件时刻落在这一场训练的时间范围内",
+                      str([e["at"] for e in (ev or [])][:5]))
+
     finally:
         await runner.cleanup()
 

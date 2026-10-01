@@ -92,6 +92,10 @@ RAMP_MIN_STEPS = 3              # 至少要踩过这么多级才算一次有效�
 # 自由骑行的默认阻力档位（原始 0-255）。不同骑行台刻度差别很大，
 # 界面上可以随时微调。
 DEFAULT_FREE_RESISTANCE = 90
+# 踏频低于这个值（rpm）却报出功率时，那一帧按无效处理。不踩就没有功率输出，
+# 这是物理约束，用来挡固件在骑手停踩瞬间甩出的假帧（实测 0rpm/273W）。
+POWER_IDLE_CADENCE = 2.0
+POWER_IDLE_MAX_W = 20.0
 
 
 def mmss(seconds: float) -> str:
@@ -1423,9 +1427,22 @@ class WorkoutSession:
             self._last_trace = now
         self.no_data_since = None
         if "power_w" in latest:
-            self.current_power = float(latest["power_w"])
-            self._power_window.append((now, self.current_power))
-            self._control_window.append((now, self.current_power))
+            power = float(latest["power_w"])
+            # 踏频为 0 却报出功率：物理上不可能（不踩就没有功率输出），但实测这台
+            # 固件在骑手突然停踩时会甩出一帧假的——135W 的骑行里报过 273W/0rpm，
+            # 直接把报告的"最大功率"顶到 273W，平均功率和区间分布也跟着脏一点。
+            # 和骑行台那个 0bpm 的心率字段同一个道理：物理上不可能的值按"没有数据"
+            # 处理，而不是当成真数据收下。
+            cadence = (float(latest["cadence_rpm"]) if "cadence_rpm" in latest
+                       else self.current_cadence)
+            if (cadence is not None and cadence <= POWER_IDLE_CADENCE
+                    and power > POWER_IDLE_MAX_W):
+                log.debug("丢弃不可能的一帧：功率 %.0fW 而踏频 %.0frpm", power, cadence)
+                power = None
+            self.current_power = power
+            if power is not None:
+                self._power_window.append((now, power))
+                self._control_window.append((now, power))
         if "cadence_rpm" in latest:
             self.current_cadence = float(latest["cadence_rpm"])
         if "speed_kmh" in latest:

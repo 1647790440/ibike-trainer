@@ -273,7 +273,19 @@ class Server:
         key = summary.get("finished_at")
         if key is not None and key == self._last_saved_finish:
             return
-        report = self.reports.save(summary)
+        # 把这一场训练期间的事件一起写进报告。事后复盘最缺的恰恰不是数字，而是
+        # "报告里那两段空白，到底是用户按了暂停，还是骑行台掉线挂起了"——只看
+        # 曲线和统计答不出来，只能去问用户。事件里写得清清楚楚。
+        started = float(summary.get("started_at") or 0.0)
+        events = [e for e in self.events if float(e.get("t") or 0.0) >= started]
+        payload = dict(summary)
+        payload["events"] = [
+            # 相对时刻（秒）比绝对时间戳好读，也和 trace 的 t 同一把尺子
+            {"at": round(float(e.get("t") or 0.0) - started, 1),
+             "kind": e.get("kind"), "message": e.get("message")}
+            for e in events[-80:]
+        ]
+        report = self.reports.save(payload)
         if report is None:
             return
         self._last_saved_finish = key
