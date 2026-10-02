@@ -41,6 +41,18 @@ WEB_DIR = Path(__file__).parent / "web"
 MIN_BROADCAST_INTERVAL_S = 0.25
 IDLE_HEARTBEAT_S = 2.0
 
+# ---- 骑行台自动重连 ----
+# 真机实测：骑手停下来不踩之后，台子约 47 秒报"Stopped"、约 109 秒后自动关机
+# （蓝牙断链）。以前断链之后必须"回设备页 → 扫描 → 点设备 → 回训练页 → 点继续"，
+# 一次长休息就要走一遍。现在训练没结束时后台自己把它接回来。
+#
+# 为什么要重试这么久：台子是被踩醒的，骑手回来之前它根本不在广播——按心率带那种
+# "重试几次就放弃"的做法会在骑手回来之前就放弃。
+AUTO_RECONNECT_DELAYS_S = (5.0, 8.0, 12.0, 18.0, 25.0, 30.0)
+AUTO_RECONNECT_MAX_S = 30.0
+AUTO_RECONNECT_CONNECT_TIMEOUT_S = 6.0   # 单次连接尝试的超时，别让尝试叠起来
+AUTO_RECONNECT_SCAN_S = 5.0              # 扫描兜底（地址漂了/没存过地址时）
+
 
 @web.middleware
 async def same_origin_only(request: web.Request, handler: Any) -> web.StreamResponse:
@@ -110,6 +122,11 @@ class Server:
         self._dirty: Optional[asyncio.Event] = None
         self._busy: Optional[asyncio.Lock] = None
         self._broadcast_task: Optional[asyncio.Task] = None
+        # 自动重连：任务句柄 + 对外的"正在重连"标志（前端据此写提示）。
+        # 重试节奏做成实例属性，测试可以压到毫秒级。
+        self._reconnect_task: Optional[asyncio.Task] = None
+        self.auto_reconnecting = False
+        self.auto_reconnect_delays = AUTO_RECONNECT_DELAYS_S
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -141,7 +158,7 @@ class Server:
         # _disconnect_trainer 里会先把没结束的训练收尾存成报告，这里不要再
         # 单独 aclose 一次——那会把会话任务提前掐掉。
         await self._disconnect_hr()
-        await self._disconnect_trainer()
+        await self._disconnect_trainer()   # 内部会先停掉自动重连
 
     async def _broadcast_loop(self) -> None:
         """按固定节奏推送状态。
@@ -212,6 +229,8 @@ class Server:
         心率带是独立外设，所以在**没有训练会话**的时候（设定页）也要能看到它连没连上。
         """
         snap = dict(self._snapshot)
+        # 正在自动重连骑行台（前端据此把"去设备页手动连"改成"等着就行"）
+        snap["auto_reconnecting"] = bool(self.auto_reconnecting)
         hr_state = self._hr_state()
         snap["hr_client"] = hr_state
         # 没在训练的时候，心率的实时读数直接取**心率带自己**的最新一帧，
@@ -262,6 +281,10 @@ class Server:
                 log.warning("骑行台掉线，训练已挂起（未结束）：%s", message)
                 self._snapshot = session.snapshot()
                 self._mark_dirty()
+        elif kind == "trainer-lost":
+            # 训练还挂在那儿等骑行台回来：起一个后台任务自己把它接回去，
+            # 不用用户跑到设备页手动连（台子是被踩醒的，所以会一直重试）
+            self._start_auto_reconnect()
         asyncio.ensure_future(self._broadcast({"type": "event", "data": entry}))
 
     def _save_report(self) -> None:
@@ -295,6 +318,100 @@ class Server:
     # 连接管理
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # 骑行台自动重连（只在"训练还没结束"时工作）
+    # ------------------------------------------------------------------
+
+    def _start_auto_reconnect(self) -> None:
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return
+        self.auto_reconnecting = True
+        self._reconnect_task = asyncio.ensure_future(self._auto_reconnect_loop())
+
+    def _stop_auto_reconnect(self) -> None:
+        task = self._reconnect_task
+        # 自动重连是**这个任务自己**在跑 _connect_trainer，而它开头会调
+        # _disconnect_trainer（里面就调到这里）。这时候什么都不能动：
+        #   · cancel() 会在下一个 await 点抛 CancelledError，把刚建好的连接毁掉；
+        #   · 把 auto_reconnecting 抹成 False，循环下一轮就会以为"被取消了"直接退出，
+        #     一次失败之后就再也不重试了（台子还没被踩醒的时候必然发生）。
+        if task is not None and task is asyncio.current_task():
+            return
+        self.auto_reconnecting = False
+        self._reconnect_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _auto_reconnect_loop(self) -> None:
+        """断链之后自己把骑行台接回来，接上之后由会话那边"骑起来就自动继续"。
+
+        退出条件：连上了 / 训练结束了 / 用户主动断开了。台子断电之后要等骑手
+        踩一下才会重新广播，所以这里不设"重试几次就放弃"，只把间隔退避到 30 秒。
+        """
+        delays = list(self.auto_reconnect_delays)
+        attempt = 0
+        try:
+            while True:
+                delay = delays[min(attempt, len(delays) - 1)] if delays else 5.0
+                await asyncio.sleep(delay)
+                attempt += 1
+                if not self.auto_reconnecting:
+                    return
+                session = self.session
+                if session is None or not session.is_unfinished():
+                    return
+                if self.trainer is not None and getattr(self.trainer, "connected", False):
+                    return
+                # 每三次尝试用一次扫描兜底：地址漂了、或者老版本升级上来没存地址
+                address = await self._reconnect_target(use_scan=(attempt % 3 == 0))
+                if not address:
+                    continue
+                try:
+                    async with self._busy:
+                        if not self.auto_reconnecting:
+                            return
+                        session = self.session
+                        if session is None or not session.is_unfinished():
+                            return
+                        if (self.trainer is not None
+                                and getattr(self.trainer, "connected", False)):
+                            return
+                        await self._connect_trainer(address=address)
+                except Exception as exc:            # noqa: BLE001 - 连不上就下一轮
+                    log.info("自动重连骑行台第 %d 次失败：%s", attempt, exc)
+                    continue
+                log.warning("骑行台已自动重连（第 %d 次尝试）", attempt)
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("自动重连循环异常")
+        finally:
+            self.auto_reconnecting = False
+            self._mark_dirty()
+
+    async def _reconnect_target(self, use_scan: bool) -> str:
+        """先按记住的地址直连；需要时扫一遍广播兜底。"""
+        saved = str(self.settings.get("trainer_address") or "")
+        if saved:
+            return saved
+        if not use_scan or self.scanning:
+            return ""
+        try:
+            raw = await scan_raw(timeout=AUTO_RECONNECT_SCAN_S)
+        except BleScanError as exc:
+            log.info("自动重连扫描失败：%s", exc)
+            return ""
+        wanted = str(self.settings.get("trainer_name") or "")
+        found = [d.to_dict() for d in TrainerClient.classify_trainers(raw)]
+        for d in found:
+            if wanted and str(d.get("name") or "") == wanted:
+                return str(d.get("address") or "")
+        # 名字对不上（固件改名/没存过名字）时，只有一台候选才敢用
+        if len(found) == 1:
+            return str(found[0].get("address") or "")
+        return ""
+
     async def _disconnect_trainer(self, keep_session: bool = False) -> None:
         """断开骑行台。
 
@@ -303,6 +420,8 @@ class Server:
         默认的 False 是用户的明确意图（点「断开」、关服务），那就照旧把没骑完的
         训练收尾存成报告。
         """
+        # 用户主动断开（或关服务）时别再自动连回来
+        self._stop_auto_reconnect()
         session = self.session
         kept = False
         if session is not None:
@@ -406,6 +525,13 @@ class Server:
             # 心率带是独立外设，但"当前该用哪一根"由服务端持有（模拟模式会换成
             # 模拟带子）。接回来的会话要用当前这根，别继续用旧的。
             keep.heart_rate = self.hr
+        if not getattr(trainer, "is_simulator", False):
+            # 记住这台骑行台：掉线之后要按地址直接连回去（模拟设备没有地址）
+            try:
+                self.settings.update({"trainer_address": getattr(trainer, "address", "") or "",
+                                      "trainer_name": trainer.name or ""})
+            except OSError:
+                log.exception("保存骑行台地址失败")
         self._snapshot = self.session.snapshot()
         self._mark_dirty()
         return trainer.state()

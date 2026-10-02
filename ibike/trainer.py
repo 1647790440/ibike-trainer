@@ -90,10 +90,18 @@ class TrainerClient:
         self._disconnect_reason: Optional[str] = None
         self._intentional_disconnect = False
 
+    @property
+    def address(self) -> str:
+        """这台骑行台的地址（macOS 上是 CoreBluetooth 的 UUID）。
+
+        暴露出来是给"自动重连"用的：断链之后要按地址直接连回去，不然每次都得
+        重新扫一遍广播；台子断电之后要等骑手踩醒它才开始广播，扫描窗口很容易错过。
+        """
+        return str(getattr(self, "_address", "") or "")
+
     # ------------------------------------------------------------------
     # 扫描
     # ------------------------------------------------------------------
-
     @staticmethod
     def classify_trainers(raw: List[RawDevice]) -> List[DeviceInfo]:
         """从一次广播扫描的结果里筛出骑行台候选。

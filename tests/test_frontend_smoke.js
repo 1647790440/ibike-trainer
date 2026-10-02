@@ -1220,6 +1220,25 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   check(getEl('rideNotice').textContent.indexOf('接回这场训练') >= 0,
         '设备页仍然提醒"连接会接回这场训练"');
 
+  // 掉线 + 后台自动重连：提示必须从"去设备页手动连"改成"骑起来就行"
+  context.render(Object.assign({}, liveBase, {
+    state: 'paused', trainer_lost: true, auto_reconnecting: true,
+    trainer: { connected: false, kind: 'ble', capabilities: {} },
+  }));
+  check(getEl('note').textContent.indexOf('后台自动重连') >= 0
+        && getEl('note').textContent.indexOf('不用去') >= 0,
+        '提示写明了"正在后台自动重连，不用手动去连"',
+        getEl('note').textContent.slice(0, 40));
+  check(getEl('btnPause').disabled === true,
+        '自动重连期间「继续」是灰的（还没连上，点了必然失败）');
+  check(getEl('trainerHint').textContent.indexOf('后台自动重连') >= 0,
+        '骑行台那块也说清了正在自动重连',
+        getEl('trainerHint').textContent.slice(0, 30));
+  check(getEl('rideNotice').textContent.indexOf('后台自动重连') >= 0
+        && getEl('rideNotice').textContent.indexOf('什么都不用点') >= 0,
+        '设备页顶上那条改成"这里什么都不用点"',
+        getEl('rideNotice').textContent.slice(0, 34));
+
   // 自动暂停：不是用户按的，提示必须说清"踩起来会自动继续"
   context.render(Object.assign({}, liveBase, {
     state: 'paused', auto_paused: true,

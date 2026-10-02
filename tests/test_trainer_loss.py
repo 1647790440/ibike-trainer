@@ -75,6 +75,7 @@ class FakeTrainer:
         }
         # 记下收到的指令，「继续」之后必须真的重新下发目标功率
         self.commands: List[Any] = []
+        self.address = "AA:BB:CC:DD"
 
     # -- 连接 ----------------------------------------------------------
 
@@ -588,6 +589,23 @@ async def test_impossible_power_frame_is_dropped() -> None:
         check(session.max_power >= 270,
               "有踏频的 273W 照常采用（别把真冲刺一起筛掉）",
               "{:.0f}W".format(session.max_power))
+
+        # 单帧暴涨：真机上出现过 135W → 642W（踏频 126）的一帧，踏频正常，只能靠
+        # "一帧之内涨不了这么多"挡住。这里直接按帧调取数函数，不依赖循环时序。
+        trainer.feed(135.0, 90.0)
+        session._ingest_trainer_data(1.0, 0.1)
+        check(session.current_power == 135.0, "正常帧照常采用",
+              str(session.current_power))
+        trainer.feed(642.0, 126.0)
+        session._ingest_trainer_data(1.1, 0.1)
+        check(session.current_power is None,
+              "135W 之后单帧跳到 642W 被丢掉（真机上顶到过这个数）",
+              str(session.current_power))
+        trainer.feed(642.0, 126.0)
+        session._ingest_trainer_data(1.2, 0.1)
+        check(session.current_power == 642.0,
+              "同样功率的下一帧照常采用（真冲刺只被延迟一帧）",
+              str(session.current_power))
         await session.stop()
     finally:
         await session.aclose()
@@ -600,6 +618,141 @@ async def _feed_session(trainer, seconds: float) -> None:
     while time.monotonic() < end:
         trainer.feed(130.0)
         await asyncio.sleep(0.05)
+
+
+async def test_stale_suspend_and_auto_reconnect() -> None:
+    """收不到数据超过阈值 → 挂起 + 后台自动重连 + 骑起来自动继续。
+
+    这是真机上最烦人的那条流程：休息久了台子自动关机，用户得"回设备页 → 扫描 →
+    点设备 → 回训练页 → 点继续"。现在这三步全自动，用户只要重新骑起来。
+    """
+    print("\n[10] 沉默挂起 + 自动重连 + 骑起来自动继续（全程不碰 HTTP）")
+    install_fake_trainer()
+    FakeTrainer.should_fail = False
+
+    async def scenario(http, base, server):
+        reports0 = len(await _reports(http, base))
+        # 压缩时间轴：重连节奏、自动继续的确认时间都压到毫秒级
+        server.auto_reconnect_delays = (0.1, 0.2, 0.3)
+        await _connect(http, base)
+        await _start(http, base)
+        feeder = asyncio.ensure_future(_feed_until(server, 1.2))
+        await asyncio.sleep(1.3)
+        await feeder
+        session = server.session
+        session.AUTO_RESUME_HOLD_S = 0.4
+        session.STALE_SUSPEND_S = 0.5
+
+        # 台子断电：链路断掉，事件照常报。同时让重连先失败几次——台子是被踩醒的，
+        # 骑手回来之前连不上才是常态（顺便验证失败时不会留半成品连接）
+        FakeTrainer.should_fail = True
+        server.trainer.drop()
+        await asyncio.sleep(0.4)
+        check(session.trainer_lost is True, "掉线后训练被挂起")
+        check(session.auto_paused is True, "挂起也算「自动停下的」（否则不会自动继续）")
+        check(server.auto_reconnecting is True, "服务端已经开始自动重连",
+              str(server.auto_reconnecting))
+        check(server._full_snapshot().get("auto_reconnecting") is True,
+              "快照里带 auto_reconnecting（前端据此说「等着就行」）")
+
+        # 连着失败也要继续重试，不能放弃、也不能把训练弄丢
+        await asyncio.sleep(0.5)
+        check(server.trainer is None, "连不上时没有留下半成品连接")
+        check(server.session is session, "重试期间训练会话一直留着")
+        check(len(await _reports(http, base)) == reports0,
+              "重试期间没有写出报告（训练没被结束）",
+              "{} → {} 份".format(reports0, len(await _reports(http, base))))
+
+        # 台子回来了
+        FakeTrainer.should_fail = False
+        for _ in range(40):
+            await asyncio.sleep(0.1)
+            if server.trainer is not None and getattr(server.trainer, "connected", False):
+                break
+        check(server.trainer is not None and server.trainer.connected,
+              "自动重连成功了（用户什么都没点）")
+        check(server.session is session and session.trainer is server.trainer,
+              "还是同一场训练，已经绑到新连上的骑行台")
+        check(session.trainer_lost is False, "「掉线」标志已清掉")
+        check(session.state == "paused", "接回来之后先是暂停（等数据证明真的在骑）",
+              session.state)
+
+        # 骑起来 → 自动继续
+        await _feed_until(server, 1.2)
+        check(session.state == "running", "检测到正在骑行，自动继续了", session.state)
+        check(session.auto_paused is False, "自动继续之后再踩停才会重新自动暂停")
+        check(("power", 130) in server.trainer.commands,
+              "自动继续时重新下发了目标功率", str(server.trainer.commands[:4]))
+
+        e0 = session.elapsed_s
+        await _feed_until(server, 0.6)
+        check(session.elapsed_s > e0, "计时接着走",
+              "{:.1f} → {:.1f}".format(e0, session.elapsed_s))
+        async with http.post(base + "/api/stop", json={}) as r:
+            await r.json()
+
+    await with_server(scenario)
+
+
+async def test_stale_suspend_without_disconnect_event() -> None:
+    """蓝牙半开：台子不说话了但**没有断连回调**，也要挂起并开始重连。"""
+    print("\n[11] 没有断连回调时，靠「数据沉默」挂起并发起重连")
+    install_fake_trainer()
+    FakeTrainer.should_fail = False
+
+    async def scenario(http, base, server):
+        server.auto_reconnect_delays = (0.1, 0.2, 0.3)
+        await _connect(http, base)
+        await _start(http, base)
+        feeder = asyncio.ensure_future(_feed_until(server, 0.8))
+        await asyncio.sleep(0.9)
+        await feeder
+        session = server.session
+        session.STALE_SUSPEND_S = 0.4
+        check(session.state == "running", "先在正常骑行", session.state)
+
+        # 台子哑掉：不发 disconnected 事件，只是不再推数据（把"最后一次收到数据"
+        # 的时间往前拨，模拟已经沉默了一段时间）
+        server.trainer.latest = {}
+        server.trainer.connected = False
+        server.trainer.last_data_time = time.monotonic() - 5.0
+        for _ in range(30):
+            await asyncio.sleep(0.1)
+            if session.trainer_lost:
+                break
+        check(session.trainer_lost is True, "沉默超时后挂起了（没有断连事件也认）")
+        check("没收到" in (session.trainer_lost_reason or ""),
+              "挂起原因指向「收不到数据」", str(session.trainer_lost_reason))
+        check(server.auto_reconnecting is True, "并且开始自动重连了")
+
+    await with_server(scenario)
+
+
+async def test_disconnect_stops_auto_reconnect() -> None:
+    print("\n[12] 用户主动断开：自动重连要停下来，别再自己连回去")
+    install_fake_trainer()
+    FakeTrainer.should_fail = False
+
+    async def scenario(http, base, server):
+        server.auto_reconnect_delays = (0.1, 0.2, 0.3)
+        await _connect(http, base)
+        await _start(http, base)
+        feeder = asyncio.ensure_future(_feed_until(server, 0.8))
+        await asyncio.sleep(0.9)
+        await feeder
+        FakeTrainer.should_fail = True      # 让重连一直失败，好观察"正在重连"这个状态
+        server.trainer.drop()
+        await asyncio.sleep(0.4)
+        check(server.auto_reconnecting is True, "掉线后开始自动重连")
+
+        async with http.post(base + "/api/disconnect", json={}) as r:
+            await r.json()
+        await asyncio.sleep(0.4)
+        check(server.auto_reconnecting is False, "主动断开后不再重连")
+        check(server.trainer is None, "也没有偷偷连回来")
+        check(server.session is None, "会话已收起")
+
+    await with_server(scenario)
 
 
 async def main() -> int:
@@ -615,6 +768,9 @@ async def main() -> int:
     await test_silent_link_reconnect_keeps_ride()
     await test_rebind_while_running_reapplies_control()
     await test_impossible_power_frame_is_dropped()
+    await test_stale_suspend_and_auto_reconnect()
+    await test_stale_suspend_without_disconnect_event()
+    await test_disconnect_stops_auto_reconnect()
 
     print("\n" + "=" * 70)
     if _failures:

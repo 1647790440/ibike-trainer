@@ -96,6 +96,12 @@ DEFAULT_FREE_RESISTANCE = 90
 # 这是物理约束，用来挡固件在骑手停踩瞬间甩出的假帧（实测 0rpm/273W）。
 POWER_IDLE_CADENCE = 2.0
 POWER_IDLE_MAX_W = 20.0
+# 相邻两帧之间功率最多能涨多少（W）。人不可能在零点几秒里把功率翻几倍，而固件
+# 在骑手突然停踩/重新踩起来的那一瞬间会甩出离谱值——实测 135W 的骑行里报过
+# 一帧 642W（踏频 126）和一帧 273W（踏频 0），直接把报告的"最大功率"顶上天。
+# 只挡"单帧暴涨"：真冲刺的第一帧可能被丢，第二帧（同样的功率）照常采用，
+# 所以并不会把真实的高功率抹掉。
+_POWER_JUMP_MAX_W = 300.0
 
 # ---- 自动暂停 ----
 # 停下来接个电话、喝口水、站起来揉揉屁股的时候，秒表不该继续走。判据是"确实
@@ -113,6 +119,10 @@ _AUTO_RESUME_CADENCE = 40.0
 _AUTO_RESUME_POWER_W = 20.0     # 固件不报踏频时的退路
 _AUTO_RESUME_HOLD_S = 3.0
 _AUTO_RESUME_RETRY_S = 10.0     # 自动继续失败后的重试间隔（别每 0.1 秒撞一次）
+# 收不到骑行台数据超过这么久就当作"台子不见了"：挂起训练（而不是让秒表空转），
+# 服务端那边会开始自动重连。真机实测台子停踩后约 109 秒自动关机、蓝牙断链，
+# 但断连回调不一定来（蓝牙半开时数据的沉默才是唯一信号）。
+_STALE_SUSPEND_S = 20.0
 
 
 def mmss(seconds: float) -> str:
@@ -254,6 +264,8 @@ class WorkoutSession:
     AUTO_RESUME_POWER_W = _AUTO_RESUME_POWER_W
     AUTO_RESUME_HOLD_S = _AUTO_RESUME_HOLD_S
     AUTO_RESUME_RETRY_S = _AUTO_RESUME_RETRY_S
+    STALE_SUSPEND_S = _STALE_SUSPEND_S
+    POWER_JUMP_MAX_W = _POWER_JUMP_MAX_W
 
     def __init__(self, trainer: Any,
                  on_update: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -379,6 +391,8 @@ class WorkoutSession:
         self.auto_paused = False
         self._zero_since: Optional[float] = None      # 从什么时候开始"没在踩"
         self._pedal_since: Optional[float] = None     # 从什么时候开始"又踩起来了"
+        # 上一帧骑行台报的原始功率（过滤单帧暴涨用，见 _ingest_trainer_data）
+        self._raw_power_prev: Optional[float] = None
         self._auto_resume_block_until = 0.0           # 自动继续失败后的重试冷却
 
     # ------------------------------------------------------------------
@@ -476,6 +490,7 @@ class WorkoutSession:
         self._zero_since = None
         self._pedal_since = None
         self._auto_resume_block_until = 0.0
+        self._raw_power_prev = None
         self._native_watch.clear()
         self._native_probe = None
         self._probe_cooldown_until = 0.0
@@ -632,8 +647,14 @@ class WorkoutSession:
             except Exception as exc:
                 log.warning("暂停指令下发失败：%s", exc)
         if auto:
-            self._notify("auto-pause", "检测到没在踩（功率和踏频都归零 {:.0f} 秒），"
-                         "已自动暂停；重新踩起来会自动继续".format(self.AUTO_PAUSE_HOLD_S))
+            if self._stale:
+                why = "已经 {:.0f} 秒没收到骑行台数据".format(self.AUTO_PAUSE_HOLD_S)
+                tail = "训练已挂起，会自动尝试重新连接骑行台"
+            else:
+                why = "检测到没在踩（功率和踏频都归零 {:.0f} 秒）".format(
+                    self.AUTO_PAUSE_HOLD_S)
+                tail = "重新踩起来会自动继续"
+            self._notify("auto-pause", "{}，已自动暂停；{}".format(why, tail))
         else:
             self._notify("paused", "已暂停")
         await self._emit()
@@ -692,7 +713,7 @@ class WorkoutSession:
         self.auto_paused = False
         self._zero_since = None
         self._pedal_since = None
-        self._notify("resumed", "重新踩起来了，已自动继续" if auto else "继续训练")
+        self._notify("resumed", "检测到正在骑行，已自动继续" if auto else "继续训练")
         await self._emit()
 
     def _no_output(self) -> bool:
@@ -730,7 +751,9 @@ class WorkoutSession:
         只对**自动**暂停生效。手动按下的暂停、骑行台掉线挂起都必须等用户自己点
         「继续」——踩两下就自动跑起来，那不是用户要的。
         """
-        if not self.auto_paused or self._stale:
+        # 两道门槛：得是"不是用户按的"那种暂停，而且骑行台得真的在（trainer_lost
+        # 为真时数据可能还从旧对象里流出来，光看数据新鲜度会误判）。
+        if not self.auto_paused or self.trainer_lost or self._stale:
             self._pedal_since = None
             return False
         if now < self._auto_resume_block_until:
@@ -780,8 +803,10 @@ class WorkoutSession:
             self.state = STATE_PAUSED
         self.trainer_lost = True
         self.trainer_lost_reason = reason or "与骑行台的连接断开了"
-        # 挂起 ≠ 自动暂停：骑行台都没了，绝不允许"踩起来自动继续"
-        self.auto_paused = False
+        # 挂起同样是"不是用户按的"，所以也标记成自动停下的：等骑行台自动接回来
+        # （见 server._auto_reconnect_loop）、并且数据表明骑手真的在骑之后，
+        # 「踩起来就自动继续」也要对它生效。手动按下的暂停才必须等用户点继续。
+        self.auto_paused = True
         self._pedal_since = None
         self._zero_since = None
         # 链路断了，正在进行的降级探测不再可信（阶跃响应的"没反应"只是台子没了）
@@ -1417,6 +1442,19 @@ class WorkoutSession:
 
                 self._ingest_trainer_data(now, dt)
 
+                # 台子彻底沉默（不是"没在踩"，是根本不说话）超过阈值就当作掉线：
+                # 挂起训练，交给服务端自动重连。断连回调时常不来（蓝牙半开、台子
+                # 静静断电），数据的沉默才是唯一可靠的信号——真机实测台子停踩后
+                # 约 109 秒自己关机，那之前它还会安安静静地推几帧 0W。
+                # 放在状态分发之前：还在骑、或者已经自动暂停，都要能走到这一步。
+                if (self._stale and self.is_unfinished()
+                        and self.no_data_since is not None
+                        and now - self.no_data_since >= self.STALE_SUSPEND_S):
+                    if self.handle_trainer_lost(
+                            "已经 {:.0f} 秒没收到骑行台数据".format(self.STALE_SUSPEND_S)):
+                        await self._emit()
+                        continue
+
                 if self.state == STATE_PAUSED:
                     # 自动暂停之后，踩起来就自动接着骑（手动暂停不走这条路）
                     await self._maybe_auto_resume(now)
@@ -1427,14 +1465,15 @@ class WorkoutSession:
                     # 而且它会在下一次训练时和新循环一起向骑行台发指令。
                     return
 
-                # 功率和踏频都归零 = 没在骑：这一刻起一秒都不往统计里记。
+                # 骑手没在输出（功率和踏频都归零）、或者根本收不到骑行台数据时，
+                # 这一刻起一秒都不往统计里记。
                 # 注意"停止累计"和"标记为暂停"是两件事：确认"不是抖动"要等满
                 # AUTO_PAUSE_HOLD_S，但记账当场就停——否则每次自动暂停都会在报告里
                 # 留下十几秒的 0W，那正是这个功能要消灭的东西。
                 # 坡道测试不受影响：它有自己的力竭判据（踏频掉到 50 以下 3 秒），
                 # 踩不动了仍然会正常结束成"力竭"。
                 if (self.AUTO_PAUSE_ENABLED and not self._is_ramp_test
-                        and not self._stale and self._no_output()):
+                        and self._no_output()):
                     await self._maybe_auto_pause(now)
                     await self._emit()
                     continue
@@ -1444,6 +1483,7 @@ class WorkoutSession:
                     # （分段统计、区间分布、FTP 计时段完成度都会跟着虚高）
                     self._last_trace = now
                     self._zero_since = None
+
 
                 self.elapsed_s += dt
                 self.active_s += dt
@@ -1583,9 +1623,16 @@ class WorkoutSession:
             # 处理，而不是当成真数据收下。
             cadence = (float(latest["cadence_rpm"]) if "cadence_rpm" in latest
                        else self.current_cadence)
+            prev_raw = self._raw_power_prev
+            self._raw_power_prev = power      # 注意记的是**原始值**：真冲刺的第二帧
+                                              # 要和第一帧（被丢的那帧）比才对
             if (cadence is not None and cadence <= POWER_IDLE_CADENCE
                     and power > POWER_IDLE_MAX_W):
                 log.debug("丢弃不可能的一帧：功率 %.0fW 而踏频 %.0frpm", power, cadence)
+                power = None
+            elif prev_raw is not None and power - prev_raw > self.POWER_JUMP_MAX_W:
+                log.debug("丢弃单帧暴涨：功率 %.0fW → %.0fW（一帧之内不可能）",
+                          prev_raw, power)
                 power = None
             self.current_power = power
             if power is not None:

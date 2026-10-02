@@ -310,13 +310,16 @@ function render(s) {
   if (els.rideNotice) {
     els.rideNotice.classList.toggle('hidden', !running);
     if (running) {
-      els.rideNotice.textContent = trainerLost
-        ? '⚠ 有一场训练正在进行，但骑行台掉线了，训练已挂起（已骑 '
-          + fmtClock(s.elapsed_s) + '）。在下面重新连上骑行台，它会接回这场训练，'
-          + '然后回「2 训练」点「继续」接着骑。'
-        : '有一场训练正在进行（' + (s.state === 'paused' ? '已暂停' : '进行中')
-          + '，已骑 ' + fmtClock(s.elapsed_s) + '）。在这里连接骑行台会接回这场训练；'
-          + '点「断开」则会结束并保存它。';
+      els.rideNotice.textContent = (trainerLost && s.auto_reconnecting)
+        ? '骑行台掉线了，训练已挂起（已骑 ' + fmtClock(s.elapsed_s)
+          + '）。程序正在后台自动重连，接上之后骑起来就会自动继续，这里什么都不用点。'
+        : (trainerLost
+           ? '⚠ 有一场训练正在进行，但骑行台掉线了，训练已挂起（已骑 '
+             + fmtClock(s.elapsed_s) + '）。在下面重新连上骑行台，它会接回这场训练，'
+             + '然后回「2 训练」点「继续」接着骑。'
+           : '有一场训练正在进行（' + (s.state === 'paused' ? '已暂停' : '进行中')
+             + '，已骑 ' + fmtClock(s.elapsed_s) + '）。在这里连接骑行台会接回这场训练；'
+             + '点「断开」则会结束并保存它。');
     }
   }
 
@@ -497,13 +500,18 @@ function render(s) {
   // 骑行台还没接回来"继续"必然失败（服务端会回一句"骑行台未连接"），
   // 与其让人点了再吃一个错误，不如直接灰掉并说清去哪儿连。
   els.btnPause.disabled = s.state === 'finished' || s.state === 'error'
-    || (s.state === 'paused' && (trainerLost || !connected));
+    || (s.state === 'paused' && (trainerLost || !connected))
+    || (s.state === 'paused' && !!s.auto_reconnecting);
 
   // 提示行
   let note = s.command_note || '';
   // 顺序有讲究：掉线挂起时，台账上往往还留着掉线那一瞬间攒下的
   // "⚠ 骑行台未连接"，它会顶掉这条真正该做的事——去重连。
-  if (trainerLost) {
+  if (trainerLost && s.auto_reconnecting) {
+    // 后台正在自动重连：用户只需要骑起来，别的什么都不用做
+    note = '骑行台掉线了，正在后台自动重连（训练已挂起，已骑 ' + fmtClock(s.elapsed_s)
+      + '）。骑起来就会自动接上并继续，不用去「1 连接设备」手动连。';
+  } else if (trainerLost) {
     note = '⚠ 骑行台掉线了，训练已经挂起（计时停住了，已骑 ' + fmtClock(s.elapsed_s)
       + '）。到「1 连接设备」重新连上骑行台，再回来点「继续」接着骑。';
   } else if (s.auto_paused) {
@@ -2347,9 +2355,12 @@ function renderTrainerBlock(s) {
     ? '--' : (s.resistance_raw / 10).toFixed(1));
 
   if (!connected) {
-    els.trainerHint.textContent = s && s.trainer_lost
-      ? '骑行台掉线了（训练已挂起，没丢）。在上面重新扫描并连接，会把这场训练接回来。'
-      : '还没连接。在上面扫描，然后点列表里的骑行台。';
+    els.trainerHint.textContent = s && s.trainer_lost && s.auto_reconnecting
+      ? '骑行台掉线了（训练已挂起，没丢）。程序正在后台自动重连，接上就会接回这场训练——'
+        + '骑起来就行，也可以在这里手动连。'
+      : (s && s.trainer_lost
+         ? '骑行台掉线了（训练已挂起，没丢）。在上面重新扫描并连接，会把这场训练接回来。'
+         : '还没连接。在上面扫描，然后点列表里的骑行台。');
   } else if (s.stale_data) {
     els.trainerHint.textContent = '已连接，但有一阵子没收到数据了——检查它是不是休眠了、'
       + '或者被手机抢走了连接。';

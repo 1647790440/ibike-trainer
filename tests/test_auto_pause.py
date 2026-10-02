@@ -11,7 +11,8 @@
 - 停表期间骑行台**不动**（软暂停）：一旦下发暂停指令，固件可能放开阻力甚至
   停推数据，就再也检测不到"骑手回来了"
 - 自动继续需要踏频连续达标几秒（碰一下曲柄不该开表）
-- **手动**暂停、骑行台掉线挂起都不自动继续——那两种情况下用户就是要它停着
+- **手动**暂停永远不自动继续——用户就是要它停着
+- 骑行台掉线挂起时：台子还没回来就踩起来也不许继续；台子接回来之后才自动继续
 - 坡道测试不受影响：踩不动了仍然结束成"力竭"，不会被自动暂停抢先
 
     python3 tests/test_auto_pause.py
@@ -274,11 +275,17 @@ async def test_manual_pause_never_auto_resumes() -> None:
         await trainer.disconnect()
 
 
-async def test_trainer_lost_never_auto_resumes() -> None:
-    print("\n[5] 骑行台掉线挂起：踩起来也不许自动继续（台子都没了）")
+async def test_trainer_lost_resumes_only_after_reconnect() -> None:
+    """掉线挂起：台子没回来不许自动继续；接回来之后才自动继续。
+
+    这一条是"自动重连"功能的另一半：挂起被标成"不是用户按的"（否则接回来也不会
+    自动继续），但光有这个标记不够——骑行台必须真的接回来了才允许继续。
+    """
+    print("\n[5] 掉线挂起：台子没回来不许继续，接回来才自动继续")
     trainer = HandTrainer()
     session = WorkoutSession(trainer)
     _compress(session)
+    new_trainer = None
     try:
         await _start(session, trainer)
         trainer.ride()
@@ -286,14 +293,29 @@ async def test_trainer_lost_never_auto_resumes() -> None:
 
         session.handle_trainer_lost("与骑行台的连接断开了")
         check(session.state == STATE_PAUSED, "掉线后挂起", session.state)
-        check(session.auto_paused is False, "挂起不算自动暂停")
         check(session.trainer_lost is True, "「掉线」标志置上")
+        check(session.auto_paused is True,
+              "挂起也标记成「不是用户按的」（否则接回来也不会自动继续）")
 
+        # 台子还没回来：这时候踩起来（哪怕是真数据）也不能继续
         trainer.ride()
         await _feed(trainer, 1.0)
-        check(session.state == STATE_PAUSED, "踩起来也不会自动继续", session.state)
+        check(session.state == STATE_PAUSED,
+              "骑行台还没接回来时，踩起来也不许自动继续", session.state)
+
+        # 台子接回来了（服务端自动重连成功走的就是这一步）
+        new_trainer = HandTrainer()
+        await new_trainer.connect()
+        await session.rebind_trainer(new_trainer)
+        check(session.trainer_lost is False, "接回来之后「掉线」标志清掉")
+        new_trainer.ride()
+        await _feed(new_trainer, 1.0)
+        check(session.state == STATE_RUNNING,
+              "台子接回来 + 检测到在骑 → 自动继续", session.state)
     finally:
         await session.aclose()
+        if new_trainer is not None:
+            await new_trainer.disconnect()
         await trainer.disconnect()
 
 
@@ -359,7 +381,7 @@ async def main() -> int:
     await test_resume_when_pedaling()
     await test_short_blip_does_not_resume()
     await test_manual_pause_never_auto_resumes()
-    await test_trainer_lost_never_auto_resumes()
+    await test_trainer_lost_resumes_only_after_reconnect()
     await test_ramp_test_still_ends_on_exhaustion()
     await test_zero_power_but_pedaling_is_not_stopped()
 

@@ -469,20 +469,24 @@ async def test_explicit_ftms_is_never_downgraded() -> None:
 
 
 async def test_stale_gap_does_not_dilute_average() -> None:
-    """数据断链的那一段时间，不能算进"平均功率"的分母。
+    """数据断链的那一段时间，不能算进"平均功率"的分母，也不能算进骑行时长。
 
-    断链时功率积分停了，但 active_s 还在走。早期实现拿 active_s 当分母，
-    实测一次 20 秒的掉线就把 100W 的骑行在报告里写成 45W——而同一份报告里的
-    做功和区间占比是用有效样本算的，于是报告自己跟自己矛盾。
+    早期实现拿 active_s 当分母，实测一次 20 秒的掉线就把 100W 的骑行在报告里写成
+    45W——而同一份报告里的做功和区间占比是用有效样本算的，于是报告自己跟自己矛盾。
+    现在的做法更彻底：**没有有效功率数据的时间一秒都不累计**（见 session 主循环里
+    "没在输出"那一段），所以断链既摊不薄平均功率，也撑不大实际时长。
+
+    这里用 10 秒的沉默（小于 STALE_SUSPEND_S），模拟"链路还在、只是暂时不上报"；
+    沉默更久会走"挂起 + 自动重连"那条路，那一条在 test_trainer_loss.py 里测。
     """
-    print("\n[16] 数据断链不会把平均功率摊薄")
+    print("\n[16] 数据断链不会把平均功率摊薄，也不会撑大骑行时长")
     import statistics
     session, trainer = await new_session()
     try:
         await session.start(120, duration_min=30, erg_mode="auto")
         await asyncio.sleep(6.0)
         trainer.set_publishing(False)          # 链路还在，只是不再上报
-        await asyncio.sleep(20.0)
+        await asyncio.sleep(10.0)
         trainer.set_publishing(True)
         await asyncio.sleep(6.0)
         await session.stop()
@@ -493,10 +497,9 @@ async def test_stale_gap_does_not_dilute_average() -> None:
         curve = statistics.mean(powers) if powers else None
         check(summary.get("sampled_s") is not None, "报告里记了「有数据的时间」",
               "{} 秒".format(summary.get("sampled_s")))
-        check(summary.get("sampled_s", 0) < summary.get("actual_s", 0),
-              "断链那段没有算进有数据的时间",
-              "有数据 {}s / 总共 {}s".format(
-                  summary.get("sampled_s"), summary.get("actual_s")))
+        check(summary.get("actual_s", 0) < 16.0,
+              "断链那 10 秒没有算进实际骑行时长（只统计真的在骑的时间）",
+              "实际 {}s（本应约 12s）".format(summary.get("actual_s")))
         if check(avg is not None and curve is not None, "报告里有平均功率"):
             check(abs(avg - curve) < 3.0,
                   "平均功率和曲线对得上（修复前 45W vs 100W）",

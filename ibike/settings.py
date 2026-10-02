@@ -38,6 +38,10 @@ DEFAULTS: Dict[str, Any] = {
     # 心率带：记住上次连的那一根，"下次开训自动重连"要用
     "hr_strap_address": "",
     "hr_strap_name": "",
+    # 骑行台：同理。训练中途台子自动关机之后，自动重连要靠它直接连回去，
+    # 不必每次都扫一遍广播。
+    "trainer_address": "",
+    "trainer_name": "",
     "hr_max": HR_MAX_DEFAULT,
     "hr_rest": HR_REST_DEFAULT,
     "hr_zone_mode": "max",
@@ -89,8 +93,9 @@ class Settings:
             out["ftp"] = _clamp_int(data["ftp"], FTP_MIN, FTP_MAX, FTP_DEFAULT)
         if "free_resistance" in data:
             out["free_resistance"] = _clamp_int(data["free_resistance"], 0, 255, 90)
-        # 心率带地址/名字是字符串，且不能太长（它会被写进 settings.json）
-        for key in ("hr_strap_address", "hr_strap_name"):
+        # 设备地址/名字是字符串，且不能太长（它会被写进 settings.json）
+        for key in ("hr_strap_address", "hr_strap_name",
+                    "trainer_address", "trainer_name"):
             if key in data:
                 out[key] = str(data[key] or "")[:64]
         if "hr_max" in data:
