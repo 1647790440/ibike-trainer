@@ -13,7 +13,7 @@ import socket
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Deque, Dict, Optional, Set
+from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 from aiohttp import WSMsgType, web
 
@@ -48,10 +48,10 @@ IDLE_HEARTBEAT_S = 2.0
 #
 # 为什么要重试这么久：台子是被踩醒的，骑手回来之前它根本不在广播——按心率带那种
 # "重试几次就放弃"的做法会在骑手回来之前就放弃。
-AUTO_RECONNECT_DELAYS_S = (5.0, 8.0, 12.0, 18.0, 25.0, 30.0)
-AUTO_RECONNECT_MAX_S = 30.0
+AUTO_RECONNECT_DELAYS_S = (4.0, 6.0, 10.0, 15.0, 20.0)
+AUTO_RECONNECT_MAX_S = 20.0
 AUTO_RECONNECT_CONNECT_TIMEOUT_S = 6.0   # 单次连接尝试的超时，别让尝试叠起来
-AUTO_RECONNECT_SCAN_S = 5.0              # 扫描兜底（地址漂了/没存过地址时）
+AUTO_RECONNECT_SCAN_S = 4.0              # 每轮扫描的窗口（见 _reconnect_candidates）
 
 
 @web.middleware
@@ -326,6 +326,8 @@ class Server:
         if self._reconnect_task is not None and not self._reconnect_task.done():
             return
         self.auto_reconnecting = True
+        self._on_event("trainer-reconnecting",
+                       "骑行台掉线了，正在后台自动重连（接上就会自动继续，不用手动去连）")
         self._reconnect_task = asyncio.ensure_future(self._auto_reconnect_loop())
 
     def _stop_auto_reconnect(self) -> None:
@@ -348,12 +350,12 @@ class Server:
         退出条件：连上了 / 训练结束了 / 用户主动断开了。台子断电之后要等骑手
         踩一下才会重新广播，所以这里不设"重试几次就放弃"，只把间隔退避到 30 秒。
         """
-        delays = list(self.auto_reconnect_delays)
+        delays = list(self.auto_reconnect_delays) or [AUTO_RECONNECT_MAX_S]
         attempt = 0
+        last_error = ""
         try:
             while True:
-                delay = delays[min(attempt, len(delays) - 1)] if delays else 5.0
-                await asyncio.sleep(delay)
+                await asyncio.sleep(delays[min(attempt, len(delays) - 1)])
                 attempt += 1
                 if not self.auto_reconnecting:
                     return
@@ -362,11 +364,10 @@ class Server:
                     return
                 if self.trainer is not None and getattr(self.trainer, "connected", False):
                     return
-                # 每三次尝试用一次扫描兜底：地址漂了、或者老版本升级上来没存地址
-                address = await self._reconnect_target(use_scan=(attempt % 3 == 0))
-                if not address:
-                    continue
-                try:
+                candidates, note = await self._reconnect_candidates(use_scan=attempt > 1)
+                connected = False
+                error = ""
+                if candidates:
                     async with self._busy:
                         if not self.auto_reconnecting:
                             return
@@ -376,12 +377,27 @@ class Server:
                         if (self.trainer is not None
                                 and getattr(self.trainer, "connected", False)):
                             return
-                        await self._connect_trainer(address=address)
-                except Exception as exc:            # noqa: BLE001 - 连不上就下一轮
-                    log.info("自动重连骑行台第 %d 次失败：%s", attempt, exc)
-                    continue
-                log.warning("骑行台已自动重连（第 %d 次尝试）", attempt)
-                return
+                        for address in candidates:
+                            try:
+                                await self._connect_trainer(address=address)
+                                connected = True
+                                break
+                            except Exception as exc:    # noqa: BLE001 - 换下一个候选
+                                error = str(exc)
+                                log.info("自动重连第 %d 次尝试失败（%s）：%s",
+                                         attempt, address, exc)
+                if connected:
+                    log.warning("骑行台已自动重连（第 %d 次尝试）", attempt)
+                    self._on_event("trainer-reconnected", "骑行台已自动重连"
+                                   "（第 {} 次尝试）{}".format(attempt, note))
+                    return
+                last_error = error or last_error or "还没找到骑行台"
+                # 前两次各留一条，之后每 5 次留一条：既能看懂它一直在试，
+                # 又不会把事件列表刷满
+                if attempt <= 2 or attempt % 5 == 0:
+                    self._on_event("trainer-reconnecting",
+                                   "自动重连还在试（第 {} 次）：{}{}".format(
+                                       attempt, last_error, note))
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -390,27 +406,42 @@ class Server:
             self.auto_reconnecting = False
             self._mark_dirty()
 
-    async def _reconnect_target(self, use_scan: bool) -> str:
-        """先按记住的地址直连；需要时扫一遍广播兜底。"""
+    async def _reconnect_candidates(self, use_scan: bool) -> Tuple[List[str], str]:
+        """这一轮要试哪些地址：记住的那个 + （需要时）扫描找到的。
+
+        为什么要扫描、而且不能只在"没存过地址"时才扫：**骑行台断电重连之后，
+        macOS 眼里的 UUID 会变**（BLE 随机地址），存下来的那个从此连不上。只试它
+        就等于永远连不上——真机实测就是这么翻车的：程序一直在重试旧地址，
+        从头到尾没扫描过一次，用户只能手动去设备页扫描连接。
+
+        代价是扫描比较占蓝牙（4 秒窗口），所以第一轮先只试记住的地址（快、且
+        短暂断链时地址还是有效的），之后每轮都先扫一遍、把**刚扫到的**地址排在
+        前面（它才是当前有效的那个），记住的地址放在最后兜底。
+        """
         saved = str(self.settings.get("trainer_address") or "")
-        if saved:
-            return saved
-        if not use_scan or self.scanning:
-            return ""
-        try:
-            raw = await scan_raw(timeout=AUTO_RECONNECT_SCAN_S)
-        except BleScanError as exc:
-            log.info("自动重连扫描失败：%s", exc)
-            return ""
-        wanted = str(self.settings.get("trainer_name") or "")
-        found = [d.to_dict() for d in TrainerClient.classify_trainers(raw)]
-        for d in found:
-            if wanted and str(d.get("name") or "") == wanted:
-                return str(d.get("address") or "")
-        # 名字对不上（固件改名/没存过名字）时，只有一台候选才敢用
-        if len(found) == 1:
-            return str(found[0].get("address") or "")
-        return ""
+        scanned: List[str] = []
+        note = ""
+        if use_scan and not self.scanning:
+            found: List[Dict[str, Any]] = []
+            try:
+                raw = await scan_raw(timeout=AUTO_RECONNECT_SCAN_S)
+                found = [d.to_dict() for d in TrainerClient.classify_trainers(raw)]
+            except BleScanError as exc:
+                log.info("自动重连扫描失败：%s", exc)
+                found, note = [], "（扫描失败：{}）".format(exc)
+            if not note:
+                wanted = str(self.settings.get("trainer_name") or "")
+                by_name = [d for d in found
+                           if wanted and str(d.get("name") or "") == wanted]
+                # 名字对不上（固件改名/没存过名字）时，只有一台候选才敢用
+                pool = by_name or (found if len(found) == 1 else [])
+                scanned = [str(d.get("address") or "") for d in pool
+                           if d.get("address")]
+                note = "（扫描到 {} 台骑行台候选）".format(len(scanned))
+        out = [a for a in scanned if a]
+        if saved and saved not in out:
+            out.append(saved)
+        return out, note
 
     async def _disconnect_trainer(self, keep_session: bool = False) -> None:
         """断开骑行台。

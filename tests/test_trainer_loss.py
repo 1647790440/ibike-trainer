@@ -58,6 +58,9 @@ class FakeTrainer:
 
     should_fail = False
     fail_message = "连接失败：设备无响应"
+    # 只接受这些地址（空集合表示都接受）。用来模拟"台子断电重连之后 macOS
+    # 眼里的 UUID 变了"——旧地址从此连不上，只能靠扫描找到新地址。
+    accept_addresses: set = set()
 
     def __init__(self, on_event=None, on_data=None) -> None:
         self.on_event = on_event
@@ -82,6 +85,11 @@ class FakeTrainer:
     async def connect(self, address: str = "", timeout: float = 0.0) -> None:
         if FakeTrainer.should_fail:
             raise RuntimeError(FakeTrainer.fail_message)
+        accepted = type(self).accept_addresses
+        if accepted and address not in accepted:
+            # 真机上这一步是 bleak 的 "Peripheral not found"
+            raise RuntimeError("连接失败：找不到设备 {}".format(address))
+        self.address = address or self.address
         self.connected = True
 
     async def disconnect(self) -> None:
@@ -755,6 +763,97 @@ async def test_disconnect_stops_auto_reconnect() -> None:
     await with_server(scenario)
 
 
+async def test_reconnect_recovers_after_address_changes() -> None:
+    """台子断电重连后 macOS 眼里的 UUID 变了：必须靠**扫描**找到新地址。
+
+    这是真机上翻车的那一条：旧实现里 `_reconnect_target()` 只要"存过地址"就
+    直接返回它、**永远不扫描**，于是地址一变，后台自动重连就一直在重试一个死地址，
+    从头到尾没扫过一次——用户看到的就是"程序并没有自动扫描、自动连接"。
+    """
+    print("\n[13] 地址变了（断电重连）：自动重连必须会扫描兜底")
+    FakeTrainer.should_fail = False
+    FakeTrainer.accept_addresses = set()
+
+    class Found:
+        def __init__(self, address, name="FitShow FS-BLE-V3X"):
+            self.address, self.name = address, name
+
+        def to_dict(self):
+            return {"address": self.address, "name": self.name}
+
+    OLD, NEW = "AA:BB", "11:22:33:44"
+    scan_calls: List[int] = []
+
+    class FakeTrainerClient:
+        def __new__(cls, on_event=None, on_data=None):
+            return FakeTrainer(on_event=on_event)
+
+        @staticmethod
+        def classify_trainers(raw):
+            return raw
+
+    async def fake_scan_raw(timeout: float = 8.0):
+        scan_calls.append(1)
+        return [Found(NEW)]
+
+    server_mod.TrainerClient = FakeTrainerClient
+    server_mod.scan_raw = fake_scan_raw
+
+    async def scenario(http, base, server):
+        server.auto_reconnect_delays = (0.1, 0.1, 0.1, 0.1, 0.1, 0.1)
+        async with http.post(base + "/api/connect", json={"address": OLD}) as r:
+            await r.json()
+        await _start(http, base)
+        feeder = asyncio.ensure_future(_feed_until(server, 0.8))
+        await asyncio.sleep(0.9)
+        await feeder
+        session = server.session
+        session.AUTO_RESUME_HOLD_S = 0.4
+        check(server.settings.get("trainer_address") == OLD,
+              "第一次连上之后记住了地址", str(server.settings.get("trainer_address")))
+
+        # 台子断电后重新开机：现在只认 NEW，旧地址从此连不上
+        FakeTrainer.accept_addresses = {NEW}
+        events: List[str] = []
+        original = server._on_event
+
+        def spy(kind, message):
+            events.append(kind)
+            original(kind, message)
+
+        server._on_event = spy
+        try:
+            server.trainer.drop()
+            for _ in range(80):
+                await asyncio.sleep(0.1)
+                if server.trainer is not None and getattr(server.trainer, "connected", False):
+                    break
+        finally:
+            server._on_event = original
+
+        check(len(scan_calls) > 0, "自动重连过程中**扫描过**（旧实现从不扫描）",
+              "扫描 {} 次".format(len(scan_calls)))
+        check(server.trainer is not None and server.trainer.connected,
+              "靠扫描找到新地址并连上了", str(getattr(server.trainer, "address", "")))
+        check(server.settings.get("trainer_address") == NEW,
+              "并把记住的地址更新成新的", str(server.settings.get("trainer_address")))
+        check(server.session is session and session.trainer is server.trainer,
+              "还是同一场训练")
+        check("trainer-reconnecting" in events, "事件里能看出自动重连启动过",
+              str(events[-6:]))
+        check("trainer-reconnected" in events, "事件里能看出是**自动**重连成功的（不是手动）",
+              str(events[-4:]))
+        await _feed_until(server, 1.0)
+        check(session.state == "running", "骑起来之后自动继续", session.state)
+        async with http.post(base + "/api/stop", json={}) as r:
+            await r.json()
+
+    try:
+        await with_server(scenario)
+    finally:
+        FakeTrainer.accept_addresses = set()
+
+
 async def main() -> int:
     print("=" * 70)
     print("骑行台掉线 / 重连测试")
@@ -771,6 +870,7 @@ async def main() -> int:
     await test_stale_suspend_and_auto_reconnect()
     await test_stale_suspend_without_disconnect_event()
     await test_disconnect_stops_auto_reconnect()
+    await test_reconnect_recovers_after_address_changes()
 
     print("\n" + "=" * 70)
     if _failures:
