@@ -121,6 +121,11 @@ _AUTO_RESUME_HOLD_S = 3.0
 _AUTO_RESUME_RETRY_S = 10.0     # 自动继续失败后的重试间隔（别每 0.1 秒撞一次）
 # 阶跃探测里，功率朝着新目标移动超过这个比例就算"固件在跟目标"（见 _probe_converged）
 _PROBE_RESPONSE_RATIO = 0.5
+# 休息段（暂停/挂起期间）的心率采样：单独记一份，**不进**训练统计
+# （休息时的心率不属于训练负荷，混进平均心率和区间分布会把数据搞脏），
+# 但它是恢复能力的直接证据，而且长休息里到底发生了什么只有它说得清。
+_REST_HR_SAMPLE_S = 5.0
+_REST_HR_MAX_POINTS = 120
 # 收不到骑行台数据超过这么久就当作"台子不见了"：挂起训练（而不是让秒表空转），
 # 服务端那边会开始自动重连。真机实测台子停踩后约 109 秒自动关机、蓝牙断链，
 # 但断连回调不一定来（蓝牙半开时数据的沉默才是唯一信号）。
@@ -269,6 +274,8 @@ class WorkoutSession:
     STALE_SUSPEND_S = _STALE_SUSPEND_S
     POWER_JUMP_MAX_W = _POWER_JUMP_MAX_W
     PROBE_RESPONSE_RATIO = _PROBE_RESPONSE_RATIO
+    REST_HR_SAMPLE_S = _REST_HR_SAMPLE_S
+    REST_HR_MAX_POINTS = _REST_HR_MAX_POINTS
 
     def __init__(self, trainer: Any,
                  on_update: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -392,6 +399,12 @@ class WorkoutSession:
         # 自动暂停（见 pause(auto=True)）：只有**自动**暂停才允许自动继续，
         # 手动按下的暂停是"我就是要停着"，踩两下不该把它顶掉。
         self.auto_paused = False
+        # 休息段（暂停/挂起期间）的心率记录。见 _open_rest/_sample_rest/_close_rest：
+        # 它和训练的统计完全分开——休息心率不是训练负荷，但它能说明"恢复得快不快"，
+        # 也能说明长休息里骑手到底在干什么（比如自动重连卡住时他是不是一直在踩）。
+        self._rests: List[Dict[str, Any]] = []
+        self._rest: Optional[Dict[str, Any]] = None
+        self._last_riding_hr: Optional[float] = None
         self._zero_since: Optional[float] = None      # 从什么时候开始"没在踩"
         self._pedal_since: Optional[float] = None     # 从什么时候开始"又踩起来了"
         # 上一帧骑行台报的原始功率（过滤单帧暴涨用，见 _ingest_trainer_data）
@@ -490,6 +503,9 @@ class WorkoutSession:
         self.trainer_lost = False
         self.trainer_lost_reason = ""
         self.auto_paused = False
+        self._rests = []
+        self._rest = None
+        self._last_riding_hr = None
         self._zero_since = None
         self._pedal_since = None
         self._auto_resume_block_until = 0.0
@@ -730,6 +746,86 @@ class WorkoutSession:
                          or self.current_cadence <= self.AUTO_PAUSE_CADENCE)
         return power_quiet and cadence_quiet
 
+    # ------------------------------------------------------------------
+    # 休息段心率（暂停/挂起期间单独记一份）
+    # ------------------------------------------------------------------
+
+    def _open_rest(self) -> None:
+        if self._rest is not None:
+            return
+        if self.trainer_lost:
+            reason = "骑行台掉线"
+        elif self.auto_paused:
+            reason = "自动暂停（没在踩）"
+        else:
+            reason = "手动暂停"
+        self._rest = {
+            "started_at": round(self.elapsed_s, 1),   # 休息开始时骑到哪儿了
+            "reason": reason,
+            "hr_start": self._last_riding_hr,         # 停下来的那一刻心率
+            "hr_sum": 0.0, "hr_time": 0.0,
+            "hr_min": None, "hr_max": None, "hr_end": None,
+            "hr_at_60": None,
+            "points": [], "t": 0.0,
+            "interval": self.REST_HR_SAMPLE_S,
+            "next_sample": 0.0,     # 第一个点就落在休息开始的时刻
+
+        }
+
+    def _sample_rest(self, now: float, dt: float) -> None:
+        """暂停/挂起期间每拍记一次心率。"""
+        self._open_rest()
+        rest = self._rest
+        rest["t"] += max(0.0, dt)
+        bpm = self.current_hr
+        if bpm is None:
+            return
+        rest["hr_sum"] += bpm * dt
+        rest["hr_time"] += dt
+        rest["hr_end"] = bpm
+        rest["hr_min"] = bpm if rest["hr_min"] is None else min(rest["hr_min"], bpm)
+        rest["hr_max"] = bpm if rest["hr_max"] is None else max(rest["hr_max"], bpm)
+        # 心率回落：停下来 60 秒时掉了多少（恢复能力的经典指标，越大越好）
+        if rest["hr_at_60"] is None and rest["t"] >= 60.0:
+            rest["hr_at_60"] = bpm
+        if rest["t"] >= rest["next_sample"]:
+            rest["points"].append([round(rest["t"], 1), round(bpm, 0)])
+            rest["next_sample"] = rest["t"] + rest["interval"]
+            # 休息很久时把采样间隔翻倍，报告别无限膨胀
+            if len(rest["points"]) > self.REST_HR_MAX_POINTS:
+                rest["points"] = rest["points"][::2]
+                rest["interval"] *= 2
+                rest["next_sample"] = rest["t"] + rest["interval"]
+
+    def _close_rest(self) -> None:
+        """一段休息结束（重新骑起来、或者训练结束）：把这一段收尾。"""
+        rest = self._rest
+        if rest is None:
+            return
+        self._rest = None
+        duration = rest["t"]
+        if duration < 3.0:
+            return                    # 一两秒的抖动不值得单独记一条
+        points = rest["points"]
+        hr_start = rest["hr_start"]
+        if hr_start is None and points:
+            hr_start = points[0][1]   # 没记到"停下来那一刻"就拿第一个采样顶上
+        self._rests.append({
+            "started_at": rest["started_at"],
+            "duration_s": round(duration, 1),
+            "reason": rest["reason"],
+            "hr_start": (round(hr_start, 0) if hr_start is not None else None),
+            "hr_end": (round(rest["hr_end"], 0) if rest["hr_end"] is not None else None),
+            "hr_min": (round(rest["hr_min"], 0) if rest["hr_min"] is not None else None),
+            "hr_max": (round(rest["hr_max"], 0) if rest["hr_max"] is not None else None),
+            "hr_avg": (round(rest["hr_sum"] / rest["hr_time"], 1)
+                       if rest["hr_time"] > 0 else None),
+            "hr_drop_60s": (round(hr_start - rest["hr_at_60"], 0)
+                            if (hr_start is not None
+                                and rest["hr_at_60"] is not None) else None),
+            "hr": points,
+        })
+
     async def _maybe_auto_pause(self, now: float) -> bool:
         """"没在输出"持续够久就转成暂停。返回 True 表示刚暂停。
 
@@ -902,6 +998,7 @@ class WorkoutSession:
         self.trainer_lost = False
         self.trainer_lost_reason = ""
         self.auto_paused = False
+        self._close_rest()          # 暂停着直接结束也要把这一段收尾
         self._zero_since = None
         self._pedal_since = None
         self.finished_at = time.time()
@@ -991,6 +1088,9 @@ class WorkoutSession:
         self.trainer_lost = False
         self.trainer_lost_reason = ""
         self.auto_paused = False
+        self._rests = []
+        self._rest = None
+        self._last_riding_hr = None
         self._zero_since = None
         self._pedal_since = None
         self._auto_resume_block_until = 0.0
@@ -1102,6 +1202,12 @@ class WorkoutSession:
 
         # FTP 测试结果。测试的"完成"含义和普通训练不同：坡道测试踩到力竭本身就是
         # 正常结束，用 active_s >= duration_s 去判断会永远显示"提前结束"。
+        # 休息段：单独一块，不进上面的训练统计。时长本身也有价值
+        # （"报告里那两段空白一共多久"），所以即使没戴心率带也记下来。
+        self._close_rest()
+        rests = list(self._rests)
+        rest_s = round(sum(r["duration_s"] for r in rests), 1)
+
         test_result = self._compute_test_result(trace)
         if test_result is not None:
             completed = bool(test_result["valid"])
@@ -1127,6 +1233,12 @@ class WorkoutSession:
             "reason": reason,
             "completed": completed,
             "test_result": test_result,
+            # 休息段（暂停/挂起期间）：时长 + 那一段的心率。
+            # 心率**不并入**上面的训练统计，单独看：同样强度下掉得越快，
+            # 说明有氧恢复能力越好；另外"休息时骑手到底在干什么"也只有它说得清。
+            "rests": rests,
+            "rest_count": len(rests),
+            "rest_s": rest_s,
             "plan_name": self.plan_name,
             "is_interval": len(self.plan) > 1,
             # 历史报告里只需要"是不是测试"，结果本身在 test_result 里；
@@ -1472,6 +1584,8 @@ class WorkoutSession:
                         continue
 
                 if self.state == STATE_PAUSED:
+                    # 休息期间单独记心率（不进训练统计），见 _sample_rest
+                    self._sample_rest(now, dt)
                     # 自动暂停之后，踩起来就自动接着骑（手动暂停不走这条路）
                     await self._maybe_auto_resume(now)
                     await self._emit()
@@ -1480,6 +1594,11 @@ class WorkoutSession:
                     # 已经结束或被丢弃了，循环该退出。留在这儿空转没有意义，
                     # 而且它会在下一次训练时和新循环一起向骑行台发指令。
                     return
+                # 又骑起来了：把刚才那段休息收尾（也顺手记住"最后一段骑行心率"，
+                # 下一次休息要用它当回落基准）
+                self._close_rest()
+                if self.current_hr is not None:
+                    self._last_riding_hr = self.current_hr
 
                 # 骑手没在输出（功率和踏频都归零）、或者根本收不到骑行台数据时，
                 # 这一刻起一秒都不往统计里记。

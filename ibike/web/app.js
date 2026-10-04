@@ -61,6 +61,8 @@ const els = {
   timeLabel: $('timeLabel'), totalTime: $('totalTime'),
   sumIntervalSection: $('sumIntervalSection'), sumIntervals: $('sumIntervals'),
   sumModeSection: $('sumModeSection'), sumModeChanges: $('sumModeChanges'),
+  sumRestSection: $('sumRestSection'), sumRestStats: $('sumRestStats'),
+  sumRests: $('sumRests'),
   sumHrSection: $('sumHrSection'), sumHrStats: $('sumHrStats'),
   sumHrZones: $('sumHrZones'), sumHrHint: $('sumHrHint'),
   setupPanel: $('setupPanel'), livePanel: $('livePanel'),
@@ -772,6 +774,56 @@ function renderSummary(sum) {
     }
     if (hrStats.rr_seen) bits.push('这根带子会发 RR 间期（以后可以做静息 HRV）');
     els.sumHrHint.textContent = bits.join('；');
+  }
+
+  // 休息段（暂停/挂起期间的心率）。它是**独立**的一块：既不进平均心率，
+  // 也不进区间分布，但"心率掉得多快"和"休息时到底在干什么"只能靠它看。
+  const rests = sum.rests || [];
+  els.sumRestSection.classList.toggle('hidden', rests.length === 0);
+  els.sumRests.innerHTML = '';
+  if (rests.length) {
+    const total = sum.rest_s != null
+      ? sum.rest_s : rests.reduce((a, r) => a + (r.duration_s || 0), 0);
+    els.sumRestStats.innerHTML = '';
+    [['次数', String(rests.length) + ' 次'],
+     ['合计', fmtClock(total)],
+     ['最长', fmtClock(Math.max.apply(null, rests.map((r) => r.duration_s || 0)))]
+    ].forEach(([label, value]) => {
+      const cell = document.createElement('div');
+      cell.className = 'sum-cell';
+      cell.innerHTML = '<span class="s-label"></span><span class="s-value"></span>';
+      cell.firstChild.textContent = label;
+      cell.lastChild.textContent = value;
+      els.sumRestStats.appendChild(cell);
+    });
+    rests.forEach((r) => {
+      const row = document.createElement('div');
+      row.className = 'iv-row';
+      const at = document.createElement('span');
+      at.className = 'r-idx';
+      at.textContent = fmtClock(r.started_at || 0);
+      const dur = document.createElement('span');
+      dur.className = 'r-name';
+      dur.textContent = fmtClock(r.duration_s || 0) + ' · ' + (r.reason || '休息');
+      const hr = document.createElement('span');
+      hr.className = 'r-num';
+      hr.style.gridColumn = '3 / -1';
+      hr.style.textAlign = 'left';
+      if (r.hr_start != null && r.hr_end != null) {
+        let text = '心率 ' + Math.round(r.hr_start) + ' → ' + Math.round(r.hr_end)
+          + ' bpm';
+        if (r.hr_min != null && r.hr_min < Math.min(r.hr_start, r.hr_end)) {
+          text += '（最低 ' + Math.round(r.hr_min) + '）';
+        }
+        if (r.hr_drop_60s != null) text += ' · 60 秒回落 ' + Math.round(r.hr_drop_60s) + ' bpm';
+        hr.textContent = text;
+      } else {
+        hr.textContent = '这一段没读到心率（心率带断了或没戴）';
+        hr.style.color = 'var(--muted)';
+      }
+      row.append(at, dur, hr);
+      els.sumRests.appendChild(row);
+    });
   }
 
   // 控功率方式切换记录。这一段的存在是为了回答"阻力为什么突然变了"——

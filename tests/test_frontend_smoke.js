@@ -1156,6 +1156,46 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   check(getEl('sumHrHint').textContent.indexOf('上限保护') >= 0,
         '报告里带上了上限保护的下调记录');
 
+  // 休息段：暂停期间的心率要单独显示，不能混进训练心率
+  context.render({
+    state: 'finished', trainer: { connected: true, kind: 'ble', capabilities: {} },
+    is_interval: false, is_test: false, plan: [],
+    summary: Object.assign({}, baseSum, {
+      finished_at: 1700009996,
+      actual_s: 1800, rest_s: 300, rest_count: 2,
+      rests: [
+        { started_at: 600, duration_s: 240, reason: '骑行台掉线',
+          hr_start: 152, hr_end: 112, hr_min: 108, hr_avg: 128,
+          hr_drop_60s: 21, hr: [[0, 152], [60, 131]] },
+        { started_at: 1500, duration_s: 60, reason: '自动暂停（没在踩）',
+          hr_start: 148, hr_end: 140, hr_min: 140, hr_avg: 143,
+          hr_drop_60s: null, hr: [[0, 148]] },
+      ],
+    }),
+  });
+  check(!getEl('sumRestSection').classList.contains('hidden'),
+        '有休息段时显示这一块');
+  check(getEl('sumRests').children.length === 2, '两段休息各一行',
+        String(getEl('sumRests').children.length) + ' 行');
+  const restRow = getEl('sumRests').children[0].children;
+  check(restRow[1].textContent.indexOf('骑行台掉线') >= 0,
+        '行里有休息时长和原因', restRow[1].textContent);
+  check(restRow[2].textContent.indexOf('152') >= 0
+        && restRow[2].textContent.indexOf('112') >= 0
+        && restRow[2].textContent.indexOf('60 秒回落 21') >= 0,
+        '行里有心率变化和 60 秒回落', restRow[2].textContent);
+  check(getEl('sumRestStats').children[1].lastChild.textContent === '05:00',
+        '统计给了合计时长', getEl('sumRestStats').children[1].lastChild.textContent);
+
+  // 没有休息段的报告：整块不显示
+  context.render({
+    state: 'finished', trainer: { connected: true, kind: 'ble', capabilities: {} },
+    is_interval: false, is_test: false, plan: [],
+    summary: Object.assign({}, baseSum, { finished_at: 1700009995, rests: [] }),
+  });
+  check(getEl('sumRestSection').classList.contains('hidden'),
+        '没有休息段时不显示（不摆一排空行）');
+
   // 没有心率数据的报告：整块不显示（空着比一堆 "--" 诚实）
   context.render({
     state: 'finished', trainer: { connected: true, kind: 'ble', capabilities: {} },

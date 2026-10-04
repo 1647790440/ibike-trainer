@@ -26,6 +26,7 @@ _os.environ.setdefault("IBIKE_DATA_DIR",
 
 from aiohttp import ClientSession, web  # noqa: E402
 
+from ibike.heartrate import SimulatedHeartRate  # noqa: E402
 from ibike.session import WorkoutSession  # noqa: E402
 from ibike.server import Server  # noqa: E402
 
@@ -321,6 +322,67 @@ async def test_summary_end_to_end() -> None:
         await runner.cleanup()
 
 
+async def test_rest_hr_is_recorded_separately() -> None:
+    """暂停期间的心率要单独记一段，而且**不能**混进训练统计。
+
+    真机复盘时最缺的就是这个：长休息里心率的回落速度是恢复能力的直接证据，
+    而"自动继续卡住时骑手到底有没有在踩"也只有它说得清。
+    """
+    print("\n[3b] 休息段心率：单独记录，不污染训练统计")
+    import tempfile
+    from ibike.session import STATE_PAUSED
+    from ibike.simulator import SimulatedTrainer
+
+    trainer = SimulatedTrainer(cadence=80.0)
+    await trainer.connect()
+    session = WorkoutSession(trainer)
+    hr = SimulatedHeartRate(rest_hr=60.0, max_hr=190.0)
+    await hr.connect()
+    session.heart_rate = hr
+    try:
+        await session.start(120, duration_min=10, erg_mode="auto")
+        await asyncio.sleep(3.0)
+        before_hr = session.current_hr
+        check(before_hr is not None, "训练中心率有读数", str(before_hr))
+
+        await session.pause()          # 手动暂停
+        # 休息段至少要 3 秒才会被记下来（一两秒的抖动不值得单独一行），
+        # 所以这里停久一点，别卡在门槛上（跑整套测试时机器负载高，会翻车）
+        await asyncio.sleep(4.5)
+        check(session.state == STATE_PAUSED, "已暂停", session.state)
+        hr_in_rest = session.current_hr
+        check(hr_in_rest is not None, "暂停期间心率照常读得到", str(hr_in_rest))
+        await session.resume()
+        await asyncio.sleep(2.0)
+        await session.stop()
+
+        summary = session.summary or {}
+        rests = summary.get("rests") or []
+        if check(len(rests) == 1, "记下了一段休息", "{} 段".format(len(rests))):
+            r = rests[0]
+            check(3.5 <= r["duration_s"] <= 9.0, "时长对得上（约 4.5 秒）",
+                  "{:.1f}s".format(r["duration_s"]))
+            check(r["reason"] == "手动暂停", "记下了休息原因", str(r["reason"]))
+            check(r["hr_start"] is not None and r["hr_end"] is not None,
+                  "记下了休息前后的心率",
+                  "{} → {}".format(r["hr_start"], r["hr_end"]))
+            check(len(r["hr"]) >= 1, "带了休息期间的采样曲线",
+                  "{} 个点".format(len(r["hr"])))
+        check(summary.get("rest_s") is not None and summary["rest_s"] > 0,
+              "总结里给了休息总时长", "{}s".format(summary.get("rest_s")))
+        # 关键：休息时的心率不能混进训练心率
+        hr_stats = summary.get("heart_rate") or {}
+        riding = summary.get("actual_s") or 0
+        check(hr_stats.get("sampled_s", 0) <= riding + 1.0,
+              "训练心率的采样秒数只覆盖骑行时间（休息那段不算）",
+              "心率 {:.1f}s / 骑行 {:.1f}s".format(
+                  hr_stats.get("sampled_s") or 0, riding))
+    finally:
+        await session.aclose()
+        await trainer.disconnect()
+        await hr.disconnect()
+
+
 async def test_early_stop_and_dismiss() -> None:
     print("\n[4] 提前结束 & 关闭总结")
     server = Server(use_simulator=True)
@@ -376,6 +438,7 @@ async def main() -> int:
     test_np_window_is_really_30_seconds()
     test_np_matches_reference()
     await test_summary_end_to_end()
+    await test_rest_hr_is_recorded_separately()
     await test_early_stop_and_dismiss()
 
     print("\n" + "=" * 70)
