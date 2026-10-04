@@ -236,6 +236,72 @@ async def test_cleanup_kills_the_child() -> None:
         await runner.cleanup()
 
 
+async def test_overlay_self_exits_when_service_gone() -> None:
+    """服务消失太久，悬浮窗要自己退出（不只靠服务退出时来杀它）。
+
+    真机踩到过：关终端窗口发的是 SIGHUP、`kill` 发的是 SIGTERM，进程直接消失，
+    没人去杀子进程 → 屏幕上挂着一个永远显示"iBike 未运行"的孤儿窗口。
+    """
+    print("\n[6] 服务消失后悬浮窗要自己退出")
+    import overlay
+
+    poller = overlay.StatePoller(1, exit_after_gone=0.2)   # 端口 1 上什么都没有
+    try:
+        await asyncio.sleep(0.3)
+        check(not poller.should_exit(),
+              "从没连上过时不退出（单独跑 ./run-overlay.sh 时应该等人）")
+        # 模拟"连上过、然后服务没了"
+        poller._ever_ok = True
+        poller._last_ok = time.time() - 1.0
+        check(poller.should_exit(), "连上过又断了超过阈值 → 该退出",
+              "断了 {:.1f}s".format(poller.gone_for()))
+        check("服务已停止" in poller.note(), "窗口上给出提示", poller.note())
+        poller._last_ok = time.time()
+        check(not poller.should_exit(), "刚拿到数据时不退出")
+        check(poller.note() == "", "正常时不显示多余提示", poller.note())
+        poller.exit_after_gone = 0.0
+        poller._last_ok = time.time() - 100.0
+        check(not poller.should_exit(), "--exit-after-gone 0 表示永不自动关闭")
+    finally:
+        poller.stop()
+
+
+async def test_signal_leads_to_graceful_shutdown() -> None:
+    """收到 SIGTERM/SIGHUP 时要收尾：杀悬浮窗、存报告，然后退出。"""
+    print("\n[7] 收到 SIGTERM/SIGHUP 要走优雅收尾")
+    install_fakes()
+    import signal as _signal
+
+    server = server_mod.Server(use_simulator=False)
+    app = server.build_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    try:
+        server.overlay_command = list(SLEEPER)
+        # 注意：直接构造的 Server 不会接管信号、也不会 os._exit
+        async with ClientSession() as http:
+            await http.post("http://127.0.0.1:{}/api/overlay".format(
+                runner.addresses[0][1]), json={"action": "start"})
+        proc = server._overlay_proc
+        if check(proc is not None and proc.poll() is None, "先有一个悬浮窗在跑"):
+            server._on_terminate_signal(_signal.SIGTERM)
+            check(server._terminating, "标记为正在收尾")
+            server._on_terminate_signal(_signal.SIGTERM)   # 第二次应该是空操作
+            for _ in range(40):
+                if proc.poll() is not None:
+                    break
+                await asyncio.sleep(0.1)
+            check(proc.poll() is not None, "收尾把悬浮窗一起收掉了",
+                  "returncode={}".format(proc.poll()))
+            check(server._overlay_proc is None, "服务端也放手了")
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+    finally:
+        await runner.cleanup()
+
+
 async def main() -> int:
     print("=" * 70)
     print("悬浮窗开关测试（实验功能）")
@@ -245,6 +311,8 @@ async def main() -> int:
     await test_command_gets_the_right_port()
     await test_missing_script_gives_a_useful_error()
     await test_cleanup_kills_the_child()
+    await test_overlay_self_exits_when_service_gone()
+    await test_signal_leads_to_graceful_shutdown()
 
     print("\n" + "=" * 70)
     if _failures:

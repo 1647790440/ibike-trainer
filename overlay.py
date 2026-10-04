@@ -40,6 +40,11 @@ import urllib.request
 
 DEFAULT_PORT = 8765
 POLL_INTERVAL_S = 0.5
+# 服务没了就自己退出。为什么不只靠"服务退出时杀子进程"：那条路只在服务**优雅退出**
+# 时才走得到——关终端窗口（SIGHUP）、kill -9、程序崩了、Ctrl+C 按两下，
+# 都会留下一个孤零零的窗口在屏幕上显示"iBike 未运行"（实测就是这样）。
+# 所以再加一道：连上过服务之后，如果连续这么久联系不上，就自己关掉。
+EXIT_AFTER_GONE_S = 20.0
 
 # 颜色（RGB）
 GREEN = (0.35, 0.90, 0.45)
@@ -101,15 +106,17 @@ def _clock(seconds) -> str:
     return "{}:{:02d}".format(total // 60, total % 60)
 
 
-def format_lines(state) -> list:
+def format_lines(state, note: str = "") -> list:
     """把状态整理成要画的行：(文字, 颜色, 字号档位)。
 
     抽成纯函数是为了能单测——--selftest 就是拿几个假状态跑它。
+    ``note`` 是额外的一行提示（比如"服务已停止，12 秒后自动关闭"）。
     """
     if state is None:
-        return [("iBike 未运行", DIM, "big"),
-                ("等 127.0.0.1 上的服务起来", DIM, "small"),
-                ("", DIM, "small")]
+        lines = [("iBike 未运行", DIM, "big"),
+                 ("等 127.0.0.1 上的服务起来", DIM, "small")]
+        lines.append((note, AMBER, "small") if note else ("", DIM, "small"))
+        return lines
 
     power = state.get("power")
     target = state.get("target_power")
@@ -168,12 +175,14 @@ def format_lines(state) -> list:
 class StatePoller:
     """后台线程每 0.5 秒读一次 /api/state。只读接口，绝不干扰训练。"""
 
-    def __init__(self, port: int) -> None:
+    def __init__(self, port: int, exit_after_gone: float = EXIT_AFTER_GONE_S) -> None:
         self.port = port
         self.state = None
+        self.exit_after_gone = float(exit_after_gone)
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._last_ok = 0.0
+        self._ever_ok = False
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -184,6 +193,28 @@ class StatePoller:
         with self._lock:
             return self.state
 
+    def gone_for(self) -> float:
+        """已经多久没读到状态了（从没读到过就返回 0）。"""
+        with self._lock:
+            if not self._ever_ok or not self._last_ok:
+                return 0.0
+            return max(0.0, time.time() - self._last_ok)
+
+    def should_exit(self) -> bool:
+        """服务消失太久，该自己关掉了。
+
+        注意要求"**曾经连上过**"：单独跑 ./run-overlay.sh 而服务还没起来时，
+        它应该老老实实显示"未运行"等人，而不是自己溜走。
+        """
+        return bool(self.exit_after_gone) and self.gone_for() >= self.exit_after_gone
+
+    def note(self) -> str:
+        """给窗口底部那行用：还差几秒自动关闭。"""
+        if not self.should_exit():
+            return ""
+        left = max(0, int(round(self.exit_after_gone - self.gone_for())))
+        return "服务已停止，{} 秒后自动关闭".format(left) if left else "服务已停止"
+
     def _loop(self) -> None:
         while not self._stop.is_set():
             fresh = fetch_state(self.port)
@@ -191,6 +222,7 @@ class StatePoller:
                 if fresh is not None:
                     self.state = fresh
                     self._last_ok = time.time()
+                    self._ever_ok = True
                 elif self._last_ok and time.time() - self._last_ok > 5.0:
                     # 服务真的没了才显示"未运行"，短暂抖动保留上一份，
                     # 免得窗口一闪一闪
@@ -233,7 +265,8 @@ def _build_appkit():
 
         def drawRect_(self, _rect):
             y = PADDING
-            for text, color, kind in format_lines(self._poller.snapshot()):
+            for text, color, kind in format_lines(self._poller.snapshot(),
+                                                  self._poller.note()):
                 if text:
                     size = FONT_SIZES[kind] * self._scale
                     attrs = {
@@ -257,6 +290,9 @@ def _build_appkit():
 
         def tick_(self, _timer):
             self._view.setNeedsDisplay_(True)
+            if self._view._poller.should_exit():
+                print("服务已经联系不上，悬浮窗自动退出", flush=True)
+                AppKit.NSApplication.sharedApplication().terminate_(None)
 
     return AppKit, NSTimer, OverlayView, TickTarget
 
@@ -270,7 +306,7 @@ def run_overlay(args) -> int:
               file=sys.stderr)
         return 2
 
-    poller = StatePoller(args.port)
+    poller = StatePoller(args.port, exit_after_gone=args.exit_after_gone)
 
     app = AppKit.NSApplication.sharedApplication()
     # 不进 Dock、不抢焦点：它只是个显示层
@@ -385,6 +421,22 @@ def run_selftest(args) -> int:
         print("\n[{}]".format(label))
         for text, color, kind in format_lines(state):
             print("  [{:>5}] {:32s} rgb{}".format(kind, text, color))
+    poller = StatePoller(1, exit_after_gone=0.2)     # 端口 1 上什么都没有
+    time.sleep(0.3)
+    ok_standalone = not poller.should_exit()
+    poller._ever_ok, poller._last_ok = True, time.time() - 1.0
+    ok_gone = poller.should_exit() and "服务已停止" in poller.note()
+    poller._last_ok = time.time()
+    ok_fresh = not poller.should_exit()
+    poller.stop()
+    print("服务消失自动退出：")
+    for label, ok in (("从没连上过 → 不退出（单独跑时等人）", ok_standalone),
+                      ("连上过又断了 → 该退出（窗口上给出提示）", ok_gone),
+                      ("刚拿到数据 → 不退出", ok_fresh)):
+        print("  {} {}".format("✔" if ok else "✘", label))
+        bad += 0 if ok else 1
+    print()
+
     print("\n排版 / 配色 / 状态分支都跑通了。" if not bad
           else "\n有 {} 项位置计算不对。".format(bad))
     print("想看真实数据：先 .venv/bin/python main.py --sim，再 ./run-overlay.sh --check")
@@ -407,6 +459,9 @@ def main() -> int:
                         help="字号缩放（默认 1.0）")
     parser.add_argument("--width", type=float, default=210.0)
     parser.add_argument("--height", type=float, default=105.0)
+    parser.add_argument("--exit-after-gone", type=float, default=EXIT_AFTER_GONE_S,
+                        help="连上过服务之后，多久联系不上就自动关闭（秒，"
+                             "默认 {:.0f}；0 表示不自动关）".format(EXIT_AFTER_GONE_S))
     parser.add_argument("--check", action="store_true",
                         help="不开窗口，只打印将要显示的内容")
     parser.add_argument("--selftest", action="store_true",
@@ -420,6 +475,7 @@ def main() -> int:
         return 2
     args.pos = (x, y)
     args.alpha = max(0.15, min(1.0, args.alpha))
+    args.exit_after_gone = max(0.0, args.exit_after_gone)
 
     if args.selftest:
         return run_selftest(args)

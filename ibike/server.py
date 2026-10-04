@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
+import signal
 import socket
 import subprocess
 import sys
@@ -63,6 +65,8 @@ AUTO_RECONNECT_SCAN_S = 4.0              # 每轮扫描的窗口（见 _reconnec
 OVERLAY_SCRIPT = Path(__file__).resolve().parent.parent / "overlay.py"
 OVERLAY_LOG = Path(tempfile.gettempdir()) / "ibike-overlay.log"
 OVERLAY_START_GRACE_S = 0.8              # 起完等这么久，看它有没有立刻挂掉
+SIGNAL_EXIT_TIMEOUT_S = 8.0              # 收尾卡住时的兜底：硬退出
+SHUTDOWN_TIMEOUT_S = 3.0                 # aiohttp 关停时最多等连接多久（默认 60s！）
 
 
 @web.middleware
@@ -141,12 +145,77 @@ class Server:
         # 悬浮窗子进程（测试里可以换掉 overlay_command，免得真开窗口）
         self._overlay_proc: Optional[subprocess.Popen] = None
         self.overlay_command: Optional[List[str]] = None
+        # 收到退出信号之后的收尾状态（见 _on_terminate_signal）
+        self._terminating = False
+        # 只有由 run() 启动的"真正的服务进程"才接管信号并自己 os._exit：
+        # 测试里直接构造 Server，不该因为一个信号把测试进程带走。
+        self._owns_process = False
 
     # ------------------------------------------------------------------
     # 生命周期
     # ------------------------------------------------------------------
 
+    def _install_signal_handlers(self) -> None:
+        """接管 SIGINT / SIGTERM / SIGHUP，统一走一次优雅收尾。
+
+        为什么三个都要管：
+
+        - **SIGHUP**（关掉终端窗口）和 **SIGTERM**（`kill`）原来都是"进程直接
+          消失"：正在进行的训练**不会被存成报告**，悬浮窗还会变成孤儿挂在屏幕上
+          （用户实测踩到过）。
+        - **SIGINT**（Ctrl+C）aiohttp 自己会接管，但它接管之后会按
+          `shutdown_timeout` 等连接，实测要 6 秒才退出——用户以为没反应就会再按
+          一次，**第二下是硬杀**：报告不落盘、悬浮窗孤儿。所以这里干脆把
+          SIGINT 也接管过来（`web.run_app(handle_signals=False)`），走同一条
+          0.2 秒的快路径。
+        """
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            return
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            try:
+                loop.add_signal_handler(sig, self._on_terminate_signal, sig)
+            except (NotImplementedError, RuntimeError, ValueError, OSError):
+                pass          # 平台不支持就算了，不影响主流程
+
+    def _on_terminate_signal(self, sig: int) -> None:
+        if self._terminating:
+            log.warning("收到信号 %s，但已经在收尾了", sig)
+            return
+        self._terminating = True
+        log.warning("收到信号 %s，正在收尾（保存训练报告、关闭悬浮窗）…", sig)
+        asyncio.ensure_future(self._graceful_exit())
+
+    async def _graceful_exit(self) -> None:
+        started = time.time()
+        loop = asyncio.get_event_loop()
+        if self._owns_process:
+            # 兜底：BLE 断开偶尔会卡住，不能让进程赖着不走
+            loop.call_later(SIGNAL_EXIT_TIMEOUT_S, self._hard_exit)
+        try:
+            await self.cleanup(None)      # cleanup 的参数没用到
+        except Exception as exc:          # noqa: BLE001
+            log.warning("收尾时出错：%s", exc)
+        finally:
+            log.warning("收尾完成（耗时 %.1fs）", time.time() - started)
+            if self._owns_process:
+                # 报告已经落盘、设备已经断开、悬浮窗已经关掉——该做的都做完了。
+                # 再交给 aiohttp 慢慢等连接只会让用户以为 Ctrl+C 没反应，
+                # 然后去按第二下（那一下是硬杀，反而把报告弄丢）。
+                logging.shutdown()
+                os._exit(0)
+
+    @staticmethod
+    def _hard_exit() -> None:
+        log.warning("收尾超时，直接退出")
+        logging.shutdown()
+        os._exit(1)
+
     async def start_background(self, app: web.Application) -> None:
+        # 让 SIGINT/SIGTERM/SIGHUP 都走一次优雅收尾（见 _install_signal_handlers）
+        if self._owns_process:
+            self._install_signal_handlers()
         # 见 __init__ 里的说明：这两个原语一定要在这里建，才绑在当前运行的循环上
         self._dirty = asyncio.Event()
         self._busy = asyncio.Lock()
@@ -1348,6 +1417,7 @@ def run(host: str = "0.0.0.0", port: int = 8765, use_simulator: bool = False,
     )
     server = Server(use_simulator=use_simulator, simulator_responds=simulator_responds,
                     simulator_advertise=simulator_advertise)
+    server._owns_process = True      # 这个进程负责接管信号并自己决定何时退出
     app = server.build_app()
 
     url_local = "http://127.0.0.1:{}".format(port)
@@ -1383,4 +1453,8 @@ def run(host: str = "0.0.0.0", port: int = 8765, use_simulator: bool = False,
         except Exception:
             pass
 
-    web.run_app(app, host=host, port=port, print=None)
+    # shutdown_timeout 必须自己给：aiohttp 默认 60 秒，关服务时会傻等一分钟，
+    # 用户以为没反应就又按一次 Ctrl+C——第二下是硬杀，于是这份训练报告不落盘、
+    # 悬浮窗还会变成孤儿挂在屏幕上（真机实测踩到过）。
+    web.run_app(app, host=host, port=port, print=None, handle_signals=False,
+                shutdown_timeout=SHUTDOWN_TIMEOUT_S)

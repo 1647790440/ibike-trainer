@@ -164,6 +164,19 @@ k ← (1-α)·k + α·(P / (R·C))
   `poll()` 一次：立刻退出就把退出码和日志尾巴当错误返回，前端直接弹出来。
   `_overlay_running()` 每次 `poll()`，所以进程自己没了会如实报"没开"。
 - **状态在服务端**：`/api/state` 的 `overlay_running`，刷新页面/换标签页按钮都对。
+- **退出路径**：aiohttp 只接管 SIGINT；**SIGHUP**（关终端窗口）与 **SIGTERM**
+  （`kill`）会让进程直接消失——正在进行的训练不落盘、悬浮窗变孤儿。而且
+  aiohttp 默认 `shutdown_timeout=60`，Ctrl+C 后要傻等一分钟，用户以为没反应
+  就再按一次，**第二下是硬杀**，同样丢数据。所以现在 `web.run_app` 用
+  `handle_signals=False`，三条信号由服务自己接管：先 `cleanup()`（存报告 →
+  断设备 → 杀悬浮窗，实测 0.1 秒），然后 `os._exit(0)` 直接退出，不再等
+  aiohttp 慢慢收连接。另有 8 秒兜底硬退出，防止 BLE 断开卡死。
+  只有 `run()` 启动的进程才接管这些（`_owns_process`），测试里直接构造的
+  Server 不受影响——否则一个信号就能把测试进程 `os._exit` 掉。
+- **悬浮窗自己的兜底**：服务被 `kill -9` 或崩了时上面那条根本没机会跑，
+  所以 `StatePoller` 还记着"最后成功读到状态的时间"：**曾经连上过**、
+  又连续 `--exit-after-gone` 秒（默认 20）读不到，就自己关窗退出。要求"曾经
+  连上过"是为了让单独启动、服务还没起来时它能老实等人。
 - **两个坑**：
   1. `index.html` 和 `app.js` 分别缓存，浏览器可能拿新的 HTML 配旧的 JS——旧 JS
      里没有按钮的点击处理，症状是"按钮看得见、按下去毫无反应"（实测踩过）。
@@ -371,7 +384,7 @@ BLE 外设把真实的 `TrainerClient` 跑起来，覆盖服务发现、能力�
 .venv/bin/python tests/test_heartrate.py         # 心率带：帧解析、区间、上限保护、接口
 .venv/bin/python tests/test_server_hardening.py  # 服务端加固（实时推送/断开存报告/跨站/畸形输入）
 .venv/bin/python tests/test_trainer_loss.py      # 掉线挂起 / 重连接回 / 自动重连 / 链路半开 / 显式断开
-.venv/bin/python tests/test_overlay_toggle.py    # 悬浮窗开关（子进程起停/崩溃检测/端口/清理）
+.venv/bin/python tests/test_overlay_toggle.py    # 悬浮窗开关（起停/崩溃检测/端口/信号收尾/自动退出）
 .venv/bin/python tests/test_auto_pause.py        # 自动暂停/自动继续（含软暂停、坡道测试护栏）
 node tests/test_frontend_smoke.js                # 前端冒烟（需要 node）
 ```
@@ -396,6 +409,8 @@ node tests/test_frontend_smoke.js                # 前端冒烟（需要 node）
 - 骑行台掉线只把训练**挂起**（计时冻结、不写报告），重连要能接回同一场训练；
   只有「结束」/跑满时长/显式「断开」才收尾
 - 悬浮窗开关：起停子进程、进程自己挂掉要如实报"没开"、端口要传对、服务退出要一起收掉
+- 悬浮窗自动退出：从没连上过不退出（单独跑时等人）、连上过又断了要退出、关不关可配
+- 收到 SIGTERM/SIGHUP 要收尾（杀悬浮窗 + 存报告），重复信号是空操作
 - 停踩超过阈值自动暂停，且**停止累计当场生效**（不能等满确认期，否则报告里会
   留下十几秒 0W）；手动暂停不自动继续；坡道测试仍以「力竭」结束
 - 骑行台断链 / 数据沉默后：训练挂起 **+ 后台自动重连 + 骑起来自动继续**（全程不用

@@ -22,6 +22,7 @@
 ./run-overlay.sh --size 1.3           # 字号缩放（默认 1.0）
 ./run-overlay.sh --width 260 --height 130   # 想放更多字就一起放大
 ./run-overlay.sh --port 8765          # 服务端口（默认 8765）
+./run-overlay.sh --exit-after-gone 20 # 连上过之后多久联系不上就自动关闭（默认 20 秒，0=不关）
 ./run-overlay.sh --check              # 不开窗口，只打印它将要显示的内容
 ./run-overlay.sh --selftest           # 用假数据检查取数/配色/位置计算
 
@@ -59,11 +60,31 @@ curl -X POST -H 'Content-Type: application/json' \
 - 状态存在服务端（`/api/state` 的 `overlay_running`），所以刷新页面、换标签页
   按钮状态都是对的。
 
+## 关服务的时候它怎么消失的
+
+两层保障，因为"服务没了"有好几种死法：
+
+1. **服务主动收尾时直接杀掉它**：服务的 `cleanup()` 会 `terminate()` 悬浮窗
+   （3 秒没反应就 `kill`）。这条覆盖 Ctrl+C、`kill`、关闭终端窗口。
+2. **悬浮窗自己发现服务没了就退出**：连上过服务之后，如果连续
+   `--exit-after-gone` 秒（默认 20）读不到状态，它自己关闭。这条覆盖
+   服务被 `kill -9`、崩了、或者第 1 条根本没机会跑的情况——脏退出的孤儿窗口
+   会一直显示「iBike 未运行」挂在屏幕上，实测踩到过。
+
+从没连上过服务时（单独跑 `./run-overlay.sh` 而服务还没起来）它**不会**自己退出，
+会老老实实显示「未运行」等人。
+
 ## 踩过的坑（都修掉了）
 
 - **按钮看得见、按下去没反应**：`index.html` 和 `app.js` 是分别缓存的，浏览器
   可能把新的 HTML 和旧的 JS 混着用——旧 JS 里根本没有这个按钮的点击处理。
   现在服务发首页时会给静态资源带上 `?v=<文件 mtime>`，前端一改浏览器就必须重取。
+- **孤儿悬浮窗**：关服务的路径原来不止一条。aiohttp 只接管 SIGINT，而
+  **SIGHUP**（关终端窗口）和 **SIGTERM**（`kill`）会让进程直接消失——报告不落盘、
+  悬浮窗留在屏幕上。而且 aiohttp 默认 `shutdown_timeout=60`：Ctrl+C 之后要等
+  一分钟才退，用户以为没反应就再按一下，**第二下是硬杀**，同样丢报告、留孤儿。
+  现在三条信号都由服务自己接管、统一走 ~0.1 秒的收尾（存报告 + 关悬浮窗），
+  外加悬浮窗自己的自动退出兜底。
 - **"我改了代码怎么没生效"**：前端文件是每次请求现读的（刷新即可），
   **Python 代码是进程启动时加载的（必须重启服务）**。前端遇到 404 会直接提示
   "服务还是旧代码，请重启"。
@@ -85,7 +106,7 @@ curl -X POST -H 'Content-Type: application/json' \
 ## 测试
 
 ```bash
-.venv/bin/python tests/test_overlay_toggle.py   # 开关接口（不真开窗口）
+.venv/bin/python tests/test_overlay_toggle.py   # 开关接口 + 信号收尾 + 服务消失自动退出（都不真开窗口）
 node tests/test_frontend_smoke.js               # [10c] 节：按钮文案/状态同步/点击真的 POST
 .venv/bin/python overlay.py --selftest          # 排版、配色、位置计算
 ```
