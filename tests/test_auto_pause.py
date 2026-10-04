@@ -308,6 +308,15 @@ async def test_trainer_lost_resumes_only_after_reconnect() -> None:
         await new_trainer.connect()
         await session.rebind_trainer(new_trainer)
         check(session.trainer_lost is False, "接回来之后「掉线」标志清掉")
+        # 真机实测：台子重新上电后处在它自己的 "Stopped" 状态，只推 0W/0rpm 的帧。
+        # 数据是"新鲜"的（不触发掉线判断），但骑手踩得再久也满足不了达标条件——
+        # 所以接回来的那一刻就必须让台子重新跑起来（Start/Resume），而不是等骑手。
+        check(("start",) in new_trainer.commands,
+              "接回来的同时就发了 Start/Resume（否则台子一直推 0W/0rpm，自动继续死锁）",
+              str(new_trainer.commands[:3]))
+        check(not any(c[0] == "power" for c in new_trainer.commands),
+              "但**没有**顺手把目标功率顶上去（骑手可能还没上车）",
+              str(new_trainer.commands[:3]))
         new_trainer.ride()
         await _feed(new_trainer, 1.0)
         check(session.state == STATE_RUNNING,
@@ -373,6 +382,37 @@ async def test_zero_power_but_pedaling_is_not_stopped() -> None:
         await trainer.disconnect()
 
 
+async def test_resume_on_low_cadence_but_real_power() -> None:
+    """低踏频但有实打实的功率输出：也要自动继续。
+
+    只认踏频（≥40rpm）会漏掉一种真实情况：休息完重新上车，用 30 多转的"重齿"
+    把车带起来，功率是真的（几十上百瓦），但踏频一时上不到 40。这时候干等着
+    只会让骑手以为"程序没反应"。功率达标同样算在骑。
+
+    注意别拿"0rpm 却有功率"来试——那是物理上不可能的帧，取数时就会按无效丢掉
+    （见 test_impossible_power_frame_is_dropped）。
+    """
+    print("\n[8] 低踏频但功率是真的：也要自动继续")
+    trainer = HandTrainer()
+    session = WorkoutSession(trainer)
+    _compress(session)
+    try:
+        await _start(session, trainer)
+        trainer.ride()
+        await _feed(trainer, 0.8)
+        trainer.coast()
+        await _feed(trainer, 1.1)
+        check(session.state == STATE_PAUSED, "先进入自动暂停", session.state)
+
+        trainer.ride(power=120.0, cadence=35.0)   # 真实输出，只是踏频还没上来
+        await _feed(trainer, 0.3 + 0.5)
+        check(session.state == STATE_RUNNING,
+              "看功率也能判定「在骑」（只认踏频会卡在 40rpm 门槛上）", session.state)
+    finally:
+        await session.aclose()
+        await trainer.disconnect()
+
+
 async def main() -> int:
     print("=" * 70)
     print("自动暂停 / 自动继续测试")
@@ -384,6 +424,7 @@ async def main() -> int:
     await test_trainer_lost_resumes_only_after_reconnect()
     await test_ramp_test_still_ends_on_exhaustion()
     await test_zero_power_but_pedaling_is_not_stopped()
+    await test_resume_on_low_cadence_but_real_power()
 
     print("\n" + "=" * 70)
     if _failures:

@@ -377,6 +377,29 @@ async def test_resume_keeps_resistance() -> None:
         await trainer.disconnect()
 
 
+def test_probe_verdict_uses_real_numbers() -> None:
+    """阶跃探测的结论不能靠零点几瓦的边界差。
+
+    真机实测：目标 140W → 115W 之后，功率从 150W 降到 106.9W 停住。
+    |106.9-115| = 8.1，比容差 8.0 大一点点——旧判据据此认定"固件不跟目标"，
+    把一台明明在跟目标的台子降级成了闭环阻力（用户看到阻力掉到 4 又爬回 20）。
+    """
+    print("\n[14b] 阶跃探测的结论：动了就算跟，不能卡在边界差上")
+    session = WorkoutSession(None)      # 只用它拿阈值，不跑训练
+    ok, tol, moved = session._probe_converged(150.0, 115.0, 106.9)
+    check(ok, "真机那一次的数值（150→115，实测停在 106.9W）判为「在跟目标」",
+          "通过={} 容差±{:.1f} 移动{:.1f}W".format(ok, tol, moved))
+    ok, _, _ = session._probe_converged(150.0, 115.0, 120.0)
+    check(ok, "落在新目标容差内 → 通过")
+    ok, _, _ = session._probe_converged(150.0, 115.0, 148.0)
+    check(not ok, "几乎没动（150→148）→ 判为「不跟目标」（廉价固件那种）")
+    ok, _, _ = session._probe_converged(150.0, 115.0, 140.0)
+    check(not ok, "只动了一点（150→140，不够一半）→ 仍然算不跟")
+    # 功率本来就在目标以下（baseline < probe_target）时，只能看容差
+    ok, _, _ = session._probe_converged(110.0, 115.0, 118.0)
+    check(ok, "baseline 已经低于新目标时不会误判")
+
+
 async def test_mode_changes_are_recorded() -> None:
     """控功率方式的切换必须记进总结。
 
@@ -566,6 +589,7 @@ async def main() -> int:
     await test_start_failure_leaves_consistent_state()
     await test_concurrent_stop_sends_one_command()
     await test_resume_keeps_resistance()
+    test_probe_verdict_uses_real_numbers()
     await test_mode_changes_are_recorded()
     await test_explicit_ftms_is_never_downgraded()
     await test_stale_gap_does_not_dilute_average()

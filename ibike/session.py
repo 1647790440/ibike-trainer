@@ -119,6 +119,8 @@ _AUTO_RESUME_CADENCE = 40.0
 _AUTO_RESUME_POWER_W = 20.0     # 固件不报踏频时的退路
 _AUTO_RESUME_HOLD_S = 3.0
 _AUTO_RESUME_RETRY_S = 10.0     # 自动继续失败后的重试间隔（别每 0.1 秒撞一次）
+# 阶跃探测里，功率朝着新目标移动超过这个比例就算"固件在跟目标"（见 _probe_converged）
+_PROBE_RESPONSE_RATIO = 0.5
 # 收不到骑行台数据超过这么久就当作"台子不见了"：挂起训练（而不是让秒表空转），
 # 服务端那边会开始自动重连。真机实测台子停踩后约 109 秒自动关机、蓝牙断链，
 # 但断连回调不一定来（蓝牙半开时数据的沉默才是唯一信号）。
@@ -266,6 +268,7 @@ class WorkoutSession:
     AUTO_RESUME_RETRY_S = _AUTO_RESUME_RETRY_S
     STALE_SUSPEND_S = _STALE_SUSPEND_S
     POWER_JUMP_MAX_W = _POWER_JUMP_MAX_W
+    PROBE_RESPONSE_RATIO = _PROBE_RESPONSE_RATIO
 
     def __init__(self, trainer: Any,
                  on_update: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -758,13 +761,13 @@ class WorkoutSession:
             return False
         if now < self._auto_resume_block_until:
             return False
+        # 踏频和功率**任一**达标就算在骑。只认踏频会死在"台子重新上电后
+        # 踏频字段一直是 0"这种固件行为上（真机实测就是它把自动继续卡死的）；
+        # 台子都接回来了、还有实打实的功率输出，那就是骑手在骑。
         cadence = self.current_cadence
-        if cadence is not None:
-            pedaling = cadence >= self.AUTO_RESUME_CADENCE
-        else:
-            # 固件不报踏频时的退路：只能看功率
-            pedaling = (self.current_power is not None
-                        and self.current_power >= self.AUTO_RESUME_POWER_W)
+        power = self.current_power
+        pedaling = ((cadence is not None and cadence >= self.AUTO_RESUME_CADENCE)
+                    or (power is not None and power >= self.AUTO_RESUME_POWER_W))
         if not pedaling:
             self._pedal_since = None
             return False
@@ -858,6 +861,19 @@ class WorkoutSession:
         # FTP 的计时段完成度都会跟着虚高）
         if still_running:
             self._last_trace = asyncio.get_event_loop().time()
+        # 接回来之后**立刻**让台子重新跑起来：只发 Request Control + Start/Resume，
+        # 不下发目标功率。
+        #
+        # 为什么必要（真机实测）：骑行台重新上电后处在它自己的 "Stopped" 状态，
+        # 会安安静静地推 0W / 0rpm 的帧——数据是"新鲜"的（所以不会触发掉线判断），
+        # 但骑手踩得再久也满足不了「踏频/功率达标」，自动继续就死锁在那儿
+        # （实测死了 2 分多钟，用户以为"没连上"，只能手动连接 + 手动点继续）。
+        # 为什么只 Start 不给目标：骑手可能正站在车边转两下曲柄，一上来就把他
+        # 顶到 140W 不合适；目标交给随后的 resume()（手动）或自动继续去下发。
+        try:
+            await self.trainer.start()
+        except TrainerError as exc:
+            self.error_message = str(exc)
         self._notify("trainer-rebound", "骑行台已重新连接：这场训练还在，"
                      "已骑 {}，点「继续」接着骑".format(mmss(self.elapsed_s)))
         await self._emit()
@@ -1911,6 +1927,30 @@ class WorkoutSession:
             "{:.0f}W，看它能不能把功率压到那个值（能就继续用原生 ERG）".format(
                 baseline, self.target_power, probe_target))
 
+    def _probe_converged(self, baseline: float, probe_target: float, avg: float
+                         ) -> Tuple[bool, float, float]:
+        """探测结论：固件到底跟不跟目标功率。返回 (是否通过, 容差, 移动了多少瓦)。
+
+        两种证据都算通过：
+
+        1. 功率落在新目标附近（容差内）；
+        2. 功率**朝着新目标动了**，而且动了一大半。
+
+        为什么需要第 2 条：只看第 1 条会被零点几瓦的边界差判死。真机实测——
+        目标 140→115 后功率停在 106.9W，|106.9-115| = 8.1 比容差 8.0 大一点点，
+        于是一台明明在跟目标的台子被错误降级成闭环阻力（用户看到阻力掉到 4
+        又慢慢爬回 20）。而"廉价固件收下目标却不动"的情况下，功率几乎不动，
+        第 2 条也不会误判。
+        """
+        tolerance = max(self.FALLBACK_MIN_ERROR_W,
+                        self.FALLBACK_TOL_RATIO * probe_target)
+        moved = baseline - avg
+        if abs(avg - probe_target) <= tolerance:
+            return True, tolerance, moved
+        step = baseline - probe_target
+        responded = step > 0 and moved >= step * self.PROBE_RESPONSE_RATIO
+        return responded, tolerance, moved
+
     async def _tick_native_probe(self, now: float) -> None:
         probe = self._native_probe
         if probe is None:
@@ -1933,22 +1973,22 @@ class WorkoutSession:
         # 跟着变、功率也会跟着变），但它永远停在"当前踏频恰好骑出来的那个功率"上。
         # 只测"有没有反应"会被它骗过去——真正要问的是"它能不能把功率压到你要的值"。
         probe_target = probe["probe_target"]
-        tolerance = max(self.FALLBACK_MIN_ERROR_W,
-                        self.FALLBACK_TOL_RATIO * probe_target)
-        if abs(avg - probe_target) <= tolerance:
+        passed, tolerance, moved = self._probe_converged(
+            probe["baseline"], probe_target, avg)
+        if passed:
             self._probe_cooldown_until = now + self.PROBE_COOLDOWN_S
             self._native_watch.clear()
             self.last_command_note = "探测通过：骑行台确实在跟目标功率，继续用原生 ERG"
             self._log_mode_event(
                 "probe-ok",
-                "探测通过：目标改为 {:.0f}W 后功率收敛到 {:.0f}W（容差 ±{:.0f}W），"
-                "确认固件真的能把功率压到设定值，继续用原生 ERG".format(
-                    probe_target, avg, tolerance))
+                "探测通过：目标 {:.0f}W → {:.0f}W 后功率从 {:.0f}W 变成 {:.0f}W"
+                "（容差 ±{:.0f}W），确认固件真的在跟设定值，继续用原生 ERG".format(
+                    probe["baseline"], probe_target, probe["baseline"], avg, tolerance))
             self._notify(
                 "probe-ok",
-                "探测结果：目标改为 {:.0f}W 后功率收敛到 {:.0f}W，"
-                "说明固件真的能把功率压到设定值，继续用原生 ERG".format(
-                    probe_target, avg))
+                "探测结果：目标改为 {:.0f}W 后功率从 {:.0f}W 变成 {:.0f}W，"
+                "说明固件真的在跟设定值，继续用原生 ERG".format(
+                    probe_target, probe["baseline"], avg))
             try:
                 await self._send_target_power(self.target_power)
             except TrainerError as exc:
@@ -1958,9 +1998,10 @@ class WorkoutSession:
         # 阶跃下发了 20 秒，功率既没动、也没收敛到新目标——这次有证据了，可以降级
         self._notify(
             "fallback",
-            "骑行台不能把功率压到设定值（目标从 {:.0f}W 改为 {:.0f}W 后，功率停在 "
-            "{:.0f}W，容差 ±{:.0f}W），已自动切换到闭环阻力控制".format(
-                self.target_power, probe_target, avg, tolerance))
+            "骑行台不能把功率压到设定值（目标从 {:.0f}W 改为 {:.0f}W 后，功率只从 "
+            "{:.0f}W 变成 {:.0f}W，几乎没动，容差 ±{:.0f}W）"
+            "，已自动切换到闭环阻力控制".format(
+                self.target_power, probe_target, probe["baseline"], avg, tolerance))
         await self._enter_resistance_mode(
             initial=True, reason="自动降级：目标功率阶跃探测无响应")
 

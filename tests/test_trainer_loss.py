@@ -682,6 +682,9 @@ async def test_stale_suspend_and_auto_reconnect() -> None:
         check(server.session is session and session.trainer is server.trainer,
               "还是同一场训练，已经绑到新连上的骑行台")
         check(session.trainer_lost is False, "「掉线」标志已清掉")
+        check(("start",) in server.trainer.commands,
+              "接回来的同时发了 Start/Resume（真机不这样台子就一直推 0W/0rpm）",
+              str(server.trainer.commands[:3]))
         check(session.state == "paused", "接回来之后先是暂停（等数据证明真的在骑）",
               session.state)
 
