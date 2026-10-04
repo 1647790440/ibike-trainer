@@ -148,6 +148,29 @@ k ← (1-α)·k + α·(P / (R·C))
 - **踏频不是唯一证据**：同一台台子的踏频字段在重新上电后可能一直是 0，只认踏频会
   永久卡死。功率是实打实的输出，功率达标同样算"在骑"。
 
+## 悬浮窗：设备页那个按钮
+
+骑台子时经常一边看视频，来回切窗口很烦，所以做了个"小飞机那种"的悬浮窗：功率/
+剩余时间/心率踏频/状态浮在屏幕角落，置顶、点击穿透。
+
+- **窗口**（`overlay.py`）：macOS 原生 `NSWindow`——无边框 + 背景 clear + `opaque=0`
+  （只有文字浮着）、`level=NSFloatingWindowLevel`（置顶）、`ignoresMouseEvents`
+  （点击穿透）、`collectionBehavior` 带 `FullScreenAuxiliary`（能盖在全屏视频上）、
+  `activationPolicy=Accessory`（不进 Dock、不抢焦点）。用的是 `bleak` 顺带装好的
+  `pyobjc`，**零新增依赖**。
+- **进程**：`/api/overlay` 由服务 `Popen` 一个独立的 `overlay.py`，只读
+  `/api/state`——它崩了碰不到训练循环。`start_new_session=True` 让它免受终端
+  Ctrl+C 影响，服务退出时 `cleanup()` 显式收掉，不留孤儿。启动后等 0.8 秒
+  `poll()` 一次：立刻退出就把退出码和日志尾巴当错误返回，前端直接弹出来。
+  `_overlay_running()` 每次 `poll()`，所以进程自己没了会如实报"没开"。
+- **状态在服务端**：`/api/state` 的 `overlay_running`，刷新页面/换标签页按钮都对。
+- **两个坑**：
+  1. `index.html` 和 `app.js` 分别缓存，浏览器可能拿新的 HTML 配旧的 JS——旧 JS
+     里没有按钮的点击处理，症状是"按钮看得见、按下去毫无反应"（实测踩过）。
+     现在发首页时给静态资源带上 `?v=<mtime>`，两者永远配套。
+  2. 前端文件是每次请求现读的（刷新就新），**Python 是进程启动时加载的**（必须
+     重启服务）。前端遇到 404 会明确提示"服务还是旧代码，请重启"，不再让人猜。
+
 ## 休息段心率：单独记一份，不进训练统计
 
 暂停/挂起期间的心率**另存一份**，理由有两条：
@@ -303,7 +326,9 @@ k ← (1-α)·k + α·(P / (R·C))
 ├── run.sh               启动脚本：自动建虚拟环境、装依赖、起服务
 ├── scan.py              诊断脚本：dump 蓝牙设备的服务/特征值结构
 ├── selftest.py          自检：协议 + 两条控制路径 + 自动降级 + HTTP 接口
-├── tests/               14 套测试（见下）
+├── overlay.py           悬浮窗：macOS 原生透明置顶窗口（pyobjc，见 docs/overlay.md）
+├── run-overlay.sh       单独启动悬浮窗（一般用网页上的按钮）
+├── tests/               15 套测试（见下）
 ├── tools/
 │   ├── make_sample_reports.py  生成示例训练报告
 │   └── tune_closed_loop.py     闭环控制器调参：打印功率轨迹和波动幅度
@@ -346,6 +371,7 @@ BLE 外设把真实的 `TrainerClient` 跑起来，覆盖服务发现、能力�
 .venv/bin/python tests/test_heartrate.py         # 心率带：帧解析、区间、上限保护、接口
 .venv/bin/python tests/test_server_hardening.py  # 服务端加固（实时推送/断开存报告/跨站/畸形输入）
 .venv/bin/python tests/test_trainer_loss.py      # 掉线挂起 / 重连接回 / 自动重连 / 链路半开 / 显式断开
+.venv/bin/python tests/test_overlay_toggle.py    # 悬浮窗开关（子进程起停/崩溃检测/端口/清理）
 .venv/bin/python tests/test_auto_pause.py        # 自动暂停/自动继续（含软暂停、坡道测试护栏）
 node tests/test_frontend_smoke.js                # 前端冒烟（需要 node）
 ```
@@ -369,6 +395,7 @@ node tests/test_frontend_smoke.js                # 前端冒烟（需要 node）
 - 训练中断开连接 / 关服务时，这一场要照常落盘成报告
 - 骑行台掉线只把训练**挂起**（计时冻结、不写报告），重连要能接回同一场训练；
   只有「结束」/跑满时长/显式「断开」才收尾
+- 悬浮窗开关：起停子进程、进程自己挂掉要如实报"没开"、端口要传对、服务退出要一起收掉
 - 停踩超过阈值自动暂停，且**停止累计当场生效**（不能等满确认期，否则报告里会
   留下十几秒 0W）；手动暂停不自动继续；坡道测试仍以「力竭」结束
 - 骑行台断链 / 数据沉默后：训练挂起 **+ 后台自动重连 + 骑起来自动继续**（全程不用

@@ -44,9 +44,12 @@
     <div class="row">
       <button id="btnScan" class="btn btn-primary">扫描蓝牙设备</button>
       <button id="btnSim" class="btn btn-ghost">用模拟设备</button>
+      <!-- 悬浮窗开关：像小飞机那样把功率/心率浮在屏幕角落 -->
+      <button id="btnOverlay" class="btn btn-ghost" type="button">悬浮显示</button>
     </div>
     <p id="scanHint" class="hint">骑行台通上电、踩两圈唤醒它；心率带戴上（电极沾点水）。
       点一次扫描，骑行台和心率带会一起找出来，点一下就能连。</p>
+    <p id="overlayHint" class="hint"></p>
 
     <!-- 有训练还没骑完（暂停中、或者骑行台掉线挂起了）时的提示。
          没有它的话，用户在这个页面看到的就是"未连接 + 一个扫描按钮"，很容易以为

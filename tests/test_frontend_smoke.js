@@ -211,6 +211,9 @@ const sandbox = {
   WebSocket: FakeWebSocket,
   fetch: async (url, opts) => {
     fetchCalls.push({ url, opts });
+    if (url.indexOf('/api/overlay') >= 0) {
+      return fakeJson({ ok: true, overlay_running: true });
+    }
     if (url.indexOf('/api/templates') >= 0) {
       return fakeJson({ ok: true, templates: [
         { id: 'hiit_4x4', name: '4×4 分钟', subtitle: 'Helgerod',
@@ -933,6 +936,40 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   }
   check(html.indexOf('id="btnHrConnect"') < 0,
         '心率带块里不再放多余的「连接」按钮（连接入口统一在扫描结果里）');
+
+  /* ---- 悬浮窗开关 ---- */
+  console.log('\n[10c] 悬浮窗开关按钮');
+  check(html.indexOf('id="btnOverlay"') >= 0, '设备页有「悬浮显示」按钮');
+  check(html.indexOf('id="overlayHint"') >= 0, '按钮下面有说明行');
+
+  context.render({ state: 'idle', overlay_running: false,
+                   trainer: { connected: true, kind: 'ble', capabilities: {} },
+                   summary: null, is_interval: false, plan: [] });
+  check(getEl('btnOverlay').textContent === '悬浮显示', '没开时按钮写「悬浮显示」',
+        getEl('btnOverlay').textContent);
+  check(getEl('overlayHint').textContent.indexOf('小飞机') >= 0,
+        '说明里讲清了它是干什么的', getEl('overlayHint').textContent.slice(0, 26));
+
+  context.render({ state: 'idle', overlay_running: true,
+                   trainer: { connected: true, kind: 'ble', capabilities: {} },
+                   summary: null, is_interval: false, plan: [] });
+  check(getEl('btnOverlay').textContent === '关闭悬浮显示',
+        '开着时按钮变成「关闭悬浮显示」', getEl('btnOverlay').textContent);
+  check(getEl('overlayHint').textContent.indexOf('已开启') >= 0,
+        '开着时说明行也换了', getEl('overlayHint').textContent.slice(0, 22));
+
+  const beforeOverlay = fetchCalls.filter((c) => c.url.indexOf('/api/overlay') >= 0).length;
+  const overlayClick = elementListeners.filter(
+    (l) => l.id === 'btnOverlay' && l.type === 'click').pop();
+  if (check(!!overlayClick, '按钮挂了点击处理')) {
+    await overlayClick.fn();
+    const calls = fetchCalls.filter((c) => c.url.indexOf('/api/overlay') >= 0);
+    check(calls.length === beforeOverlay + 1, '点击打到了 /api/overlay',
+          String(calls.length - beforeOverlay) + ' 次');
+    check(calls.length && String(calls[calls.length - 1].opts.body).indexOf('toggle') >= 0,
+          '发的是 toggle 动作',
+          String(calls.length && calls[calls.length - 1].opts.body));
+  }
 
   // 骑行台块：连着的时候显示实时数据，断开时是 --
   context.render({

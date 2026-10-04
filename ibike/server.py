@@ -10,6 +10,9 @@ import asyncio
 import logging
 import math
 import socket
+import subprocess
+import sys
+import tempfile
 import time
 from collections import deque
 from pathlib import Path
@@ -52,6 +55,14 @@ AUTO_RECONNECT_DELAYS_S = (4.0, 6.0, 10.0, 15.0, 20.0)
 AUTO_RECONNECT_MAX_S = 20.0
 AUTO_RECONNECT_CONNECT_TIMEOUT_S = 6.0   # 单次连接尝试的超时，别让尝试叠起来
 AUTO_RECONNECT_SCAN_S = 4.0              # 每轮扫描的窗口（见 _reconnect_candidates）
+
+# ---- 悬浮窗 ----
+# 设备页那个「悬浮显示」按钮打的就是它：服务拉起/收掉一个独立的 overlay.py 进程。
+# 独立进程的好处是它崩了也碰不到训练循环；窗口本身是 macOS 原生透明置顶层，
+# 用 bleak 顺带装好的 pyobjc，零新增依赖。
+OVERLAY_SCRIPT = Path(__file__).resolve().parent.parent / "overlay.py"
+OVERLAY_LOG = Path(tempfile.gettempdir()) / "ibike-overlay.log"
+OVERLAY_START_GRACE_S = 0.8              # 起完等这么久，看它有没有立刻挂掉
 
 
 @web.middleware
@@ -127,6 +138,9 @@ class Server:
         self._reconnect_task: Optional[asyncio.Task] = None
         self.auto_reconnecting = False
         self.auto_reconnect_delays = AUTO_RECONNECT_DELAYS_S
+        # 悬浮窗子进程（测试里可以换掉 overlay_command，免得真开窗口）
+        self._overlay_proc: Optional[subprocess.Popen] = None
+        self.overlay_command: Optional[List[str]] = None
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -157,6 +171,7 @@ class Server:
                 pass
         # _disconnect_trainer 里会先把没结束的训练收尾存成报告，这里不要再
         # 单独 aclose 一次——那会把会话任务提前掐掉。
+        await self._stop_overlay()         # 别留一个孤零零的悬浮窗
         await self._disconnect_hr()
         await self._disconnect_trainer()   # 内部会先停掉自动重连
 
@@ -231,6 +246,8 @@ class Server:
         snap = dict(self._snapshot)
         # 正在自动重连骑行台（前端据此把"去设备页手动连"改成"等着就行"）
         snap["auto_reconnecting"] = bool(self.auto_reconnecting)
+        # 悬浮窗开着没有（设备页那个按钮据此显示"开启/关闭"）
+        snap["overlay_running"] = self._overlay_running()
         hr_state = self._hr_state()
         snap["hr_client"] = hr_state
         # 没在训练的时候，心率的实时读数直接取**心率带自己**的最新一帧，
@@ -317,6 +334,93 @@ class Server:
     # ------------------------------------------------------------------
     # 连接管理
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # 悬浮窗：拉起/关掉那个独立的 overlay.py 进程
+    # ------------------------------------------------------------------
+
+    def _overlay_running(self) -> bool:
+        """它还活着吗？自己退出了（或崩了）就当没开。"""
+        proc = self._overlay_proc
+        if proc is None:
+            return False
+        if proc.poll() is None:
+            return True
+        log.info("悬浮窗进程已退出（退出码 %s）", proc.returncode)
+        self._overlay_proc = None
+        return False
+
+    def _overlay_log_tail(self, lines: int = 3) -> str:
+        try:
+            text = OVERLAY_LOG.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        return " / ".join(t for t in text.strip().splitlines()[-lines:] if t)
+
+    async def _start_overlay(self, port: int) -> None:
+        if self._overlay_running():
+            return
+        if self.overlay_command:
+            cmd = list(self.overlay_command)
+        else:
+            if not OVERLAY_SCRIPT.exists():
+                raise RuntimeError(
+                    "找不到 {} —— overlay.py 应该和 ibike/ 放在同一个目录"
+                    "（从项目根目录启动服务即可）".format(OVERLAY_SCRIPT))
+            cmd = [sys.executable, str(OVERLAY_SCRIPT), "--port", str(port)]
+        try:
+            log_file = open(OVERLAY_LOG, "wb")   # 每次启动重写，tail 反映这一次
+        except OSError:
+            log_file = subprocess.DEVNULL
+        log.info("启动悬浮窗：%s", " ".join(cmd))
+        # start_new_session：给它单独一个进程组，终端里的 Ctrl+C 不会在悬浮窗那边
+        # 打出一堆 KeyboardInterrupt；服务退出时我们自己把它收掉（见 cleanup）
+        self._overlay_proc = subprocess.Popen(
+            cmd, stdout=log_file, stderr=subprocess.STDOUT,
+            cwd=str(OVERLAY_SCRIPT.parent), start_new_session=True)
+        if log_file is not subprocess.DEVNULL:
+            log_file.close()          # 子进程已经继承了 fd，父进程这边可以关
+        await asyncio.sleep(OVERLAY_START_GRACE_S)
+        if self._overlay_proc.poll() is not None:
+            code = self._overlay_proc.returncode
+            self._overlay_proc = None
+            raise RuntimeError("悬浮窗没能启动（退出码 {}）：{}{}".format(
+                code, self._overlay_log_tail(),
+                "，详细日志见 {}".format(OVERLAY_LOG)))
+
+    async def _stop_overlay(self) -> None:
+        proc, self._overlay_proc = self._overlay_proc, None
+        if proc is None or proc.poll() is not None:
+            return
+        proc.terminate()
+        for _ in range(30):              # 最多等 3 秒，别卡住事件循环
+            if proc.poll() is not None:
+                return
+            await asyncio.sleep(0.1)
+        log.warning("悬浮窗没有响应 SIGTERM，直接杀掉")
+        proc.kill()
+        await asyncio.sleep(0.1)
+
+    async def handle_overlay(self, request: web.Request) -> web.Response:
+        """设备页那个「悬浮显示」按钮打这里：开启/关闭悬浮窗。"""
+        body = await self._body(request)
+        action = str(body.get("action") or "toggle").lower()
+        running = self._overlay_running()
+        want = (not running) if action == "toggle" else (action == "start")
+        try:
+            if want:
+                # 悬浮窗要连着同一个服务的同一端口，端口从这次请求上取最省事
+                await self._start_overlay(request.url.port or 8765)
+            else:
+                await self._stop_overlay()
+        except Exception as exc:          # noqa: BLE001 - 起不来要说清原因
+            log.warning("悬浮窗操作失败：%s", exc)
+            return web.json_response({"ok": False, "error": str(exc),
+                                      "overlay_running": self._overlay_running()},
+                                     status=400)
+        state = self._overlay_running()
+        self._mark_dirty()
+        return web.json_response({"ok": True, "overlay_running": state})
 
     # ------------------------------------------------------------------
     # 骑行台自动重连（只在"训练还没结束"时工作）
@@ -578,6 +682,7 @@ class Server:
         app.router.add_post("/api/scan", self.handle_scan)
         app.router.add_post("/api/connect", self.handle_connect)
         app.router.add_post("/api/disconnect", self.handle_disconnect)
+        app.router.add_post("/api/overlay", self.handle_overlay)
         app.router.add_post("/api/hr/connect", self.handle_hr_connect)
         app.router.add_post("/api/hr/disconnect", self.handle_hr_disconnect)
         app.router.add_post("/api/start", self.handle_start)
@@ -610,7 +715,25 @@ class Server:
         return app
 
     async def handle_index(self, request: web.Request) -> web.StreamResponse:
-        return web.FileResponse(WEB_DIR / "index.html")
+        """发首页时给静态资源带上"版本号"（用文件 mtime）。
+
+        为什么需要：index.html 和 app.js 是**分别**缓存的，浏览器完全可能把新的
+        HTML 和旧的 JS 混着用。症状很隐蔽——按钮看得见，但按下去毫无反应
+        （旧 app.js 里没有这个按钮的点击处理，实测踩过一次）。带上 ?v=mtime 之后
+        前端一改浏览器就必须重新取，这两个文件永远配套。
+        """
+        try:
+            html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+        except OSError:
+            raise web.HTTPNotFound()
+        for name in ("app.js", "style.css"):
+            try:
+                stamp = str(int((WEB_DIR / name).stat().st_mtime))
+            except OSError:
+                continue
+            html = html.replace('/static/{}"'.format(name),
+                                '/static/{}?v={}"'.format(name, stamp))
+        return web.Response(text=html, content_type="text/html", charset="utf-8")
 
     async def handle_state(self, request: web.Request) -> web.Response:
         payload = self._full_snapshot()

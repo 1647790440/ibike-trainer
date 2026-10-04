@@ -29,6 +29,7 @@ const els = {
   targetPower: $('targetPower'), powerSlider: $('powerSlider'),
   duration: $('duration'), ergMode: $('ergMode'), modeHint: $('modeHint'),
   btnStart: $('btnStart'), startHint: $('startHint'), rideNotice: $('rideNotice'),
+  btnOverlay: $('btnOverlay'), overlayHint: $('overlayHint'),
   constantFields: $('constantFields'), intervalFields: $('intervalFields'),
   customFields: $('customFields'), ftpBlock: $('ftpBlock'), ftpHint: $('ftpHint'),
   ftpInput: $('ftpInput'), templateList: $('templateList'), templateDesc: $('templateDesc'),
@@ -306,6 +307,7 @@ function render(s) {
   const showingSummary = hasSummary || !!viewingReport;
 
   renderConnChips(s);
+  renderOverlayBtn(!!s.overlay_running);
 
   // 设备页顶上那条"还有一场训练没骑完"。它独立于当前在哪个页签——
   // 用户正是因为台子掉线才跑到设备页来的，这里必须告诉他训练没丢。
@@ -2200,6 +2202,39 @@ function renderDevices(devices, connectedAddress) {
   });
 }
 
+/* 悬浮窗开关。状态由服务端持有（overlay_running），所以刷新页面、换标签页
+   都能对上——服务起来时它可能已经是开着的。 */
+function renderOverlayBtn(running) {
+  if (!els.btnOverlay) return;
+  els.btnOverlay.textContent = running ? '关闭悬浮显示' : '悬浮显示';
+  els.btnOverlay.className = 'btn ' + (running ? 'btn-danger' : 'btn-ghost');
+  if (els.overlayHint) {
+    els.overlayHint.textContent = running
+      ? '悬浮窗已开启：功率 / 剩余时间 / 心率踏频会浮在屏幕右上角（置顶、点击穿透，'
+        + '不挡你看视频）。关了它不影响训练。'
+      : '想让训练数据浮在屏幕角落（像小飞机那样，看视频不用切窗口），点上面的'
+        + '「悬浮显示」。';
+  }
+}
+
+async function toggleOverlay() {
+  els.btnOverlay.disabled = true;
+  try {
+    const res = await api('/api/overlay', { action: 'toggle' });
+    renderOverlayBtn(!!res.overlay_running);
+    logLine('info', res.overlay_running ? '悬浮窗已开启' : '悬浮窗已关闭');
+  } catch (err) {
+    // 404 基本都是"服务还是旧代码"：前端文件每次请求现读（刷新就新），
+    // 但 Python 是进程启动时加载的——加了接口之后必须重启服务。
+    const msg = String(err.message || '');
+    toast(msg.indexOf('404') >= 0
+      ? '服务还是旧代码：请在跑服务的终端 Ctrl+C，再重新 ./run.sh 后刷新本页'
+      : '悬浮窗：' + msg);
+  } finally {
+    els.btnOverlay.disabled = false;
+  }
+}
+
 async function doConnect(payload) {
   els.scanHint.textContent = '正在连接…';
   try {
@@ -2227,6 +2262,8 @@ async function doConnect(payload) {
     els.scanHint.textContent = '连接失败，请重试或换一台设备。';
   }
 }
+
+els.btnOverlay.addEventListener('click', toggleOverlay);
 
 els.btnSim.addEventListener('click', () => {
   // 选了闭环阻力就给一台"不理会目标功率"的模拟台，好把闭环这条路径真跑起来
