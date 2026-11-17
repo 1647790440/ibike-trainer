@@ -135,10 +135,25 @@ def main(argv=None) -> int:
     if args.sim:
         print("模式：模拟设备（骑行台 + 心率带）{}".format(
             "（骑行台不响应目标功率，用于验证自动降级）" if args.sim_dumb else ""))
-    run(host=args.host, port=args.port, use_simulator=args.sim,
+    try:
+        run(host=args.host, port=args.port, use_simulator=args.sim,
         simulator_responds=not args.sim_dumb,
         simulator_advertise=True if args.sim else None,
         open_browser=not args.no_browser)
+    except OSError as exc:
+        # 最常见的就是端口被另一个 iBike 占着（比如上次没退干净，或者另一个终端还开着）。
+        # 报错里只有一句 "Address already in use"，不说清是谁、也不说怎么办。
+        if getattr(exc, "errno", None) in (48, 98):     # 48 = macOS, 98 = Linux
+            print()
+            print("  端口 {} 已经被占用了。".format(args.port))
+            print("  可能是另一个 iBike 还在跑（包括打包成 App 时启动的那个）。")
+            print("  查一下是谁：  lsof -nP -iTCP:{} -sTCP:LISTEN".format(args.port))
+            print("  结束它：      kill <上面的 PID>")
+            print("  或者换个端口：{} --port {}".format(
+                sys.argv[0], args.port + 1))
+            print()
+            sys.exit(1)
+        raise
     return 0
 
 
