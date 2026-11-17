@@ -15,6 +15,9 @@ env/
 # macOS
 .DS_Store
 
+# 会话工具（DeepSeek Harness 的 skills）——和本项目无关，不进仓库
+.dsh/
+
 # 编辑器
 .idea/
 .vscode/
