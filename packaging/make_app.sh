@@ -59,21 +59,33 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
   <string>iBike 需要用蓝牙连接你的骑行台和心率带。</string>
   <key>NSBluetoothPeripheralUsageDescription</key>
   <string>iBike 需要用蓝牙连接你的骑行台和心率带。</string>
+  <!-- 项目目录在「桌面」下，而 macOS 默认禁止 App 读桌面。没有这些说明，
+       系统会**静默拒绝**（连授权弹窗都不弹）——双击后就是"完全没反应"。 -->
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>iBike 要读取桌面上的项目目录（程序本体、虚拟环境和训练数据都在那里）。</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>iBike 需要读取训练数据目录（如果你把项目放在了「文稿」里）。</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>iBike 需要读取训练数据目录（如果你把项目放在了「下载」里）。</string>
 </dict>
 </plist>
 PLIST
 
-# ---- 可执行文件：直接 exec 项目里的 python + 启动器 ----
-cat > "$OUT/Contents/MacOS/iBike" <<EOF
-#!/bin/bash
-# 由 packaging/make_app.sh 生成（项目: ${PROJECT}）
-# 把 -psn_* 这种 Finder 传进来的参数滤掉，其余照常透传
-args=()
-for a in "\$@"; do
-  case "\$a" in -psn_*) ;; *) args+=("\$a");; esac
-done
-exec "$PYTHON" "$PROJECT/packaging/launcher.py" "\${args[@]}"
-EOF
+# ---- 可执行文件：必须编译成真正的 Mach-O ----
+# 用 shell 脚本当 CFBundleExecutable 时，LaunchServices 把「主进程」算成 /bin/bash，
+# TCC 的权限归属也跟着算到 bash 头上——bash 没有用途说明字符串，于是访问「桌面」
+# 时系统会**静默拒绝**（表现为"双击完全没反应"）。编译版才有正常的授权弹窗。
+
+if ! command -v cc >/dev/null 2>&1; then
+  echo "找不到 cc 编译器（需要 Xcode Command Line Tools：xcode-select --install）" >&2
+  exit 1
+fi
+echo "编译启动器…"
+cc -O2 -Wall \
+   -DIB_PYTHON="\"$PYTHON\"" \
+   -DIB_LAUNCHER="\"$PROJECT/packaging/launcher.py\"" \
+   -DIB_PYVENV_CFG="\"$PROJECT/.venv/pyvenv.cfg\"" \
+   -o "$OUT/Contents/MacOS/iBike" packaging/app_main.c
 chmod +x "$OUT/Contents/MacOS/iBike"
 
 # ---- 启动器里读的配置 ----
@@ -95,6 +107,8 @@ cat <<TIP
 
 完成 ✓  双击这里启动：$OUT
 
+· **第一次打开会问「iBike 想访问你的桌面文件夹」→ 点允许**（项目就在桌面上，
+  不给权限的话 App 读不到程序本体，表现就是"双击没反应"）
 · 启动后菜单栏会出现「iBike · 待机」，点开可以看状态、打开控制台、显示日志、退出
 · 数据（报告/设置）还是项目目录下的 data/，和 ./run.sh 看到的是同一份
 · 改代码**不用重新打包**：退出 App 再双击就生效

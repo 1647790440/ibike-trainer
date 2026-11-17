@@ -161,11 +161,18 @@ packaging/launcher.py`。选它的理由是**改代码不用重新打包**（重
 Support/iBike`——**绝不写进 .app 里面**（升级时整个包会被替换，报告会全没）。
 第二次双击不会起第二个服务：探到端口已经有本程序应答就直接开控制台。
 
-三个坑（都踩过，`packaging/launcher.py` 里有注释）：
+四个坑（都踩过，`packaging/app_main.c` 和 `launcher.py` 里有注释）：
 1. Info.plist 缺 `NSBluetoothAlwaysUsageDescription` → 一碰蓝牙被系统直接杀进程。
 2. pyobjc 把 `NSObject` 子类里的**普通方法当 ObjC 选择器**：带参数的辅助方法会报
    `BadPrototypeError`（这次是 `_item`/`_tick`），辅助函数必须放模块级。
 3. 菜单栏那层崩了会把服务留成孤儿 → `run_menu_bar` 外面套 `try/finally: stop()`。
+4. **主可执行文件必须是 Mach-O**（`packaging/app_main.c` 编译而来）。用 shell
+   脚本当 `CFBundleExecutable` 时，LaunchServices 把主进程算成 `/bin/bash`，
+   **TCC 权限归属也跟着算给 bash**；bash 没有用途说明字符串 → 访问桌面**静默
+   拒绝**（`System Policy: Python deny file-read-data ... pyvenv.cfg`），用户
+   看到的就是"双击完全没反应"，连弹窗都没有。这个坑的排查过程：先加日志文件
+   （Finder 启动没有 stdout），发现日志一行都没写 → 说明 python 死在 import site
+   之前 → 才定位到读 `pyvenv.cfg` 被拒。**教训：给 GUI 启动的程序自带日志是必须的**。
 
 ## 心率来源：配了心率带就只认心率带
 

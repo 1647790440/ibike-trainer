@@ -205,6 +205,17 @@ def test_bundle() -> None:
           "Info.plist 有蓝牙权限说明（少了它，一碰蓝牙系统就直接杀进程）", desc)
     check(info.get("LSUIElement") is True,
           "LSUIElement=true（只驻留菜单栏，不占 Dock）")
+    check(len(str(info.get("NSDesktopFolderUsageDescription") or "")) > 5,
+          "Info.plist 有「桌面文件夹」用途说明（项目在桌面上，少了会被静默拒绝）",
+          str(info.get("NSDesktopFolderUsageDescription") or ""))
+    # 关键：主可执行文件必须是编译出来的 Mach-O。
+    # 用 shell 脚本时 LaunchServices 把主进程算成 /bin/bash，TCC 权限也归给 bash
+    # （bash 没有用途说明）→ 访问桌面被**静默拒绝**，表现是"双击完全没反应"。
+    with open(exe, "rb") as fh:
+        magic = fh.read(4)
+    check(magic in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe"),
+          "主可执行文件是 Mach-O 二进制（不能是 shell 脚本，否则权限归属会错）",
+          magic.hex())
     check(os.access(exe, os.X_OK), "可执行文件有执行位")
     data = json.loads(config.read_text(encoding="utf-8"))
     check(Path(data.get("project_root", "")) == ROOT,
