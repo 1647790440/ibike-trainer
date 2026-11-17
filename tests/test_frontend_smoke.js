@@ -552,41 +552,25 @@ canvasIds.forEach((id) => {
  * 移动端布局
  * ------------------------------------------------------------------ */
 
-console.log('\n[5] 移动端小节行的网格定义自洽');
+console.log('\n[5] 窄屏布局');
 
 const mobileQuery = /@media \(max-width: 700px\)\s*\{([\s\S]*?)\n\}/.exec(cssText);
-if (check(!!mobileQuery, '找到手机端媒体查询')) {
+if (check(!!mobileQuery, '找到窄屏媒体查询')) {
   const block = mobileQuery[1];
-  const cols = /grid-template-columns:\s*([^;]+);/.exec(block);
-  const areas = /grid-template-areas:\s*([\s\S]*?);/.exec(block);
-
-  const colCount = cols ? cols[1].trim().split(/\s+/).length : 0;
-  const rows = areas
-    ? [...areas[1].matchAll(/"([^"]+)"/g)].map((m) => m[1].trim().split(/\s+/))
-    : [];
-
-  check(colCount > 0 && rows.length > 0, '解析到网格的列与行',
-        colCount + ' 列 / ' + rows.length + ' 行');
-  check(rows.every((r) => r.length === colCount),
-        '每一行的格子数与列数一致',
-        rows.map((r) => r.join(' ')).join(' | '));
-
-  /* 这条是那个真实 bug 的直接防线：命名区域如果只落在索引列（很窄，只放序号），
-     里面的输入框会被压没。曾经写成 "dur pow pow"，dur 就只占了第 1 列。
-     所以判定条件是"从第 1 列开始、且没有跨到第 2 列"。 */
-  const indexColumn = cols ? cols[1].trim().split(/\s+/)[0] : '';
-  const narrowPx = parseFloat(indexColumn) || 0;
-  const trapped = (narrowPx > 0 && narrowPx < 60)
-    ? rows.filter((r) => r[0] === 'dur' && r[1] !== 'dur')
-    : [];
-  check(trapped.length === 0,
-        '「时长」跨出了最窄的序号列（原来就是这个 bug）',
-        trapped.length ? '第 1 列只有 ' + narrowPx + 'px，dur 只占了它' : 'dur 跨了两列');
-
-  const usedAreas = new Set(rows.flat());
-  ['idx', 'kind', 'name', 'dur', 'pow', 'btns'].forEach((name) => {
-    check(usedAreas.has(name), '网格里安排了 ' + name);
-  });
+  // 读数瓦片在窄屏两列
+  const metricsCols = /\.metrics[^{]*\{[^}]*grid-template-columns:\s*([^;]+);/.exec(block);
+  check(!!metricsCols && metricsCols[1].indexOf('2') >= 0,
+        '窄屏下读数瓦片排成两列',
+        metricsCols ? metricsCols[1].trim() : '缺失');
+  // 课程小节那一行：5 列，且名字那列必须是可伸缩的 1fr（否则输入框会被挤没，
+  // 这是当初那个真实 bug 的防线）
+  const stepCols = /\.step-row\s*\{[^}]*grid-template-columns:\s*([^;]+);/.exec(cssText);
+  if (check(!!stepCols, '小节行有明确的网格列定义')) {
+    const parts = stepCols[1].trim().split(/\s+/);
+    check(parts.length === 5, '小节行是 5 列', parts.join(' '));
+    check(parts[1] === '1fr', '名字那一列可伸缩（不会被指数列挤没）',
+          parts[1]);
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -1155,12 +1139,13 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   check(chips.length === 2, '训练页顶部有骑行台和心率带两枚状态胶囊',
         String(chips.length) + ' 枚');
   // 设备页自己有两块状态，胶囊在那儿是重复信息，所以只挂在训练页
+  // 改成左侧栏之后，连接状态常驻（不再随页面切换隐藏）
   context.switchView('devices');
-  check(getEl('connChips').classList.contains('hidden'),
-        '设备页不显示那两枚胶囊（下面两块已经写清楚了）');
+  check(!getEl('connChips').classList.contains('hidden'),
+        '设备页也显示连接状态（现在在左侧栏常驻）');
   context.switchView('training');
   check(!getEl('connChips').classList.contains('hidden'),
-        '切回训练页时胶囊又出现');
+        '训练页同样显示');
   check(chips[0].textContent.indexOf('✓') >= 0 && chips[1].textContent.indexOf('—') >= 0,
         '骑行台已连接、心率带未连接（各自显示对）',
         chips[0].textContent + ' / ' + chips[1].textContent);

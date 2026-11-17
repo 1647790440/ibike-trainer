@@ -3,33 +3,39 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0b0f14">
+<meta name="theme-color" content="#faf8f5">
 <title>iBike 智能骑行控制台</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <div class="app">
 
+  <!-- 左侧栏：品牌 / 页面导航 / 连接状态 / 页脚 -->
   <header class="topbar">
     <div class="brand">
       <span class="logo">iBike</span>
       <span class="sub">智能骑行控制台</span>
     </div>
+
+    <nav id="viewTabs" class="view-tabs">
+      <button type="button" id="btnViewDevices" class="vtab on" data-view="devices">连接设备</button>
+      <button type="button" id="btnViewTraining" class="vtab" data-view="training">训练</button>
+      <button type="button" id="btnViewReports" class="vtab" data-view="reports">报告</button>
+    </nav>
+
+    <span id="connChips" class="conn-chips"></span>
+
+    <footer class="foot">本地运行 · 蓝牙直连</footer>
   </header>
 
+  <main class="view-main">
   <!-- 全局消息条：连接失败之类的错误必须让人看得见 -->
   <div id="banner" class="banner hidden" role="alert" aria-live="assertive">
     <span id="bannerText"></span>
     <button id="bannerClose" class="banner-close" type="button" aria-label="关闭">×</button>
   </div>
-
-  <!-- ================= 连接 + 设置 ================= -->
-  <nav id="viewTabs" class="view-tabs">
-    <button type="button" id="btnViewDevices" class="vtab on" data-view="devices">1 连接设备</button>
-    <button type="button" id="btnViewTraining" class="vtab" data-view="training">2 训练</button>
-    <button type="button" id="btnViewReports" class="vtab" data-view="reports">3 报告</button>
-    <span id="connChips" class="conn-chips"></span>
-  </nav>
 
   <!-- ================= 视图 1：连接设备 =================
        这一页只负责"把两台设备接上"：骑行台 + 心率带。训练目标、心率参数、
@@ -519,11 +525,10 @@
   </section><!-- /reportsView -->
 
 
-  <footer class="foot">
-    本地运行 · 骑行台通过蓝牙直连本机 · 关闭终端即停止
-  </footer>
 
+</main>
 </div>
+
 <script src="/static/app.js"></script>
 </body>
 </html>

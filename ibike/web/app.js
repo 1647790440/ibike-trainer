@@ -139,12 +139,18 @@ function fitCanvas(canvas, fallbackHeight) {
   return { ctx: ctx, w: cssW, h: cssHpx };
 }
 
-/* 不同段用不同颜色：高强度偏暖，恢复偏冷，一眼能看出当前处在什么状态 */
+/* 浅色主题的调色板：只用墨/石墨/灰（design.md 只允许一个彩色 accent，
+ * 而 accent 是给选中态用的，不进图表）。段与段靠深浅区分。 */
+const INK = '#27251e';
+const GRAPHITE = '#72706b';
+const ASH = '#92918b';
+const MIST = '#d1d1cd';
+const PAPER = '#faf8f5';
 const KIND_COLORS = {
-  warmup: '#4da3ff',
-  work: '#ff7a5f',
-  recovery: '#4da3ff',
-  cooldown: '#34e3a4',
+  warmup: ASH,
+  work: INK,
+  recovery: GRAPHITE,
+  cooldown: ASH,
 };
 
 let state = { state: 'idle', trainer: {} };
@@ -522,7 +528,7 @@ function render(s) {
       + '）。重新踩起来会自动继续，也可以直接点「继续」。';
   } else if (s.error) note = '⚠ ' + s.error;
   else if (s.stale_data) note = '⚠ 已经有一阵子没收到骑行台数据了，检查一下它是否还在连接状态';
-  setText(els.note, note || '—');
+  setText(els.note, note || '');
   els.note.classList.toggle('warn', !!(s.error || s.stale_data || trainerLost));
 
   // 图表
@@ -1115,7 +1121,7 @@ function applyView(view) {
   els.btnViewReports.classList.toggle('on', currentView === 'reports');
   // 状态胶囊只在训练页显示：设备页本身就有一块"骑行台"和一块"心率带"，
   // 各自带着状态和数据，再在顶上重复一遍纯属噪音。
-  els.connChips.classList.toggle('hidden', currentView !== 'training');
+  // 连接状态现在在左侧栏常驻，不随页面切换隐藏
   try { window.localStorage.setItem('ibike.view', currentView); } catch (e) { /* 无所谓 */ }
 }
 
@@ -1206,8 +1212,8 @@ function drawPlanChart(canvas, steps, opts = {}) {
   const w = cssW, h = cssH - padT - padB;
 
   if (!steps || !steps.length) {
-    ctx.fillStyle = '#3d4c5f';
-    ctx.font = '11px -apple-system, sans-serif';
+    ctx.fillStyle = GRAPHITE;
+    ctx.font = '11px Inter, system-ui, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('暂无课表', cssW / 2, cssH / 2);
     return;
@@ -1216,7 +1222,7 @@ function drawPlanChart(canvas, steps, opts = {}) {
   const total = steps.reduce((a, s) => a + (s.duration_s || 0), 0) || 1;
   const maxP = Math.max(...steps.map((s) => s.target_power || 0), 1);
   const COLORS = {
-    warmup: '#4da3ff', work: '#ff5f6d', recovery: '#43536b', cooldown: '#34e3a4',
+    warmup: ASH, work: INK, recovery: GRAPHITE, cooldown: ASH,
   };
   const current = (opts.currentIndex == null) ? -1 : opts.currentIndex;
 
@@ -1226,7 +1232,7 @@ function drawPlanChart(canvas, steps, opts = {}) {
     const bw = Math.max(1, (s.duration_s / total) * w);
     const bh = Math.max(2, ((s.target_power || 0) / maxP) * h);
     const y = padT + h - bh;
-    const base = COLORS[s.kind] || '#8b9bb0';
+    const base = COLORS[s.kind] || GRAPHITE;
     if (current >= 0) {
       ctx.globalAlpha = i < current ? 0.28 : (i === current ? 1 : 0.65);
     } else {
@@ -1242,7 +1248,7 @@ function drawPlanChart(canvas, steps, opts = {}) {
   // 当前段内部进度线：一眼看出这一段还剩多久
   if (current >= 0 && opts.progress != null) {
     const px = currentX + currentW * Math.max(0, Math.min(1, opts.progress));
-    ctx.strokeStyle = '#e8eef6';
+    ctx.strokeStyle = PAPER;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(px, padT - 2);
@@ -1755,7 +1761,7 @@ function drawPowerChart(canvas, points, opts = {}) {
   const usable = (points || []).filter(
     (d) => Number.isFinite(d.p) && Number.isFinite(d.t));
   if (usable.length < 2) {
-    ctx.fillStyle = '#3d4c5f';
+    ctx.fillStyle = GRAPHITE;
     ctx.font = '12px -apple-system, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -1776,8 +1782,8 @@ function drawPowerChart(canvas, points, opts = {}) {
   const Y = (p) => padT + h - (Math.max(0, Math.min(maxP, p)) / maxP) * h;
 
   // 网格 + 纵轴刻度
-  ctx.strokeStyle = '#1c2735';
-  ctx.fillStyle = '#4a5a6e';
+  ctx.strokeStyle = INK;
+  ctx.fillStyle = ASH;
   ctx.lineWidth = 1;
   ctx.font = '10px -apple-system, sans-serif';
   ctx.textAlign = 'right';
@@ -1792,7 +1798,7 @@ function drawPowerChart(canvas, points, opts = {}) {
   // 目标功率阶梯虚线
   ctx.save();
   ctx.setLineDash([5, 5]);
-  ctx.strokeStyle = 'rgba(77,163,255,.75)';
+  ctx.strokeStyle = GRAPHITE;
   ctx.beginPath();
   let started = false;
   usable.forEach((d) => {
@@ -1804,26 +1810,17 @@ function drawPowerChart(canvas, points, opts = {}) {
   if (started) ctx.stroke();
   ctx.restore();
 
-  // 功率曲线 + 渐变填充
-  const grad = ctx.createLinearGradient(0, padT, 0, padT + h);
-  grad.addColorStop(0, 'rgba(52,227,164,.30)');
-  grad.addColorStop(1, 'rgba(52,227,164,0)');
+  // 功率曲线（design.md 不允许渐变，所以只有线，不铺填充）
 
   ctx.beginPath();
   ctx.moveTo(X(usable[0].t), Y(usable[0].p));
   for (let i = 1; i < usable.length; i++) {
     ctx.lineTo(X(usable[i].t), Y(usable[i].p));
   }
-  ctx.strokeStyle = '#34e3a4';
+  ctx.strokeStyle = INK;
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
   ctx.stroke();
-
-  ctx.lineTo(X(usable[usable.length - 1].t), padT + h);
-  ctx.lineTo(X(usable[0].t), padT + h);
-  ctx.closePath();
-  ctx.fillStyle = grad;
-  ctx.fill();
 
   // 心率曲线：右侧独立刻度。和功率画在一起是因为"同样的功率、心率一路往上爬"
   // 这件事只有两条线叠着看才看得出来（那就是有氧漂移）。
@@ -1844,14 +1841,14 @@ function drawPowerChart(canvas, points, opts = {}) {
     for (let i = 1; i < hrPoints.length; i++) {
       ctx.lineTo(X(hrPoints[i].t), Yhr(hrPoints[i].hr));
     }
-    ctx.strokeStyle = 'rgba(229,72,77,.9)';
+    ctx.strokeStyle = MIST;
     ctx.lineWidth = 1.5;
     ctx.lineJoin = 'round';
     ctx.stroke();
     ctx.restore();
 
     // 右侧刻度：只标最高/最低两个值，避免和左侧的功率刻度挤在一起
-    ctx.fillStyle = 'rgba(229,72,77,.85)';
+    ctx.fillStyle = ASH;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.font = '10px -apple-system, sans-serif';
@@ -1860,7 +1857,7 @@ function drawPowerChart(canvas, points, opts = {}) {
   }
 
   // 时间轴
-  ctx.fillStyle = '#4a5a6e';
+  ctx.fillStyle = ASH;
   ctx.textBaseline = 'top';
   ctx.textAlign = 'left';
   ctx.font = '10px -apple-system, sans-serif';
