@@ -239,6 +239,28 @@ class ResistancePowerController:
         return new_level, self.last_reason
 
 
+def weighted_target_power(intervals: List[Dict[str, Any]],
+                          fallback: Optional[float]) -> Optional[float]:
+    """整次训练的"目标功率"：按每段**实际骑的时长**加权。
+
+    为什么不能直接报最后一段：真机踩过——自制课表「热身 80W → 60 分钟 110W →
+    冷身 80W」的报告里目标写成了 80W，那是热身/冷身的功率，看报告的人会以为
+    整场都在骑 80W。加权平均（约 107W）才是能和平均功率直接对照的数。
+    单段课表加权结果就等于它本身，行为不变；报告列表也用它重算历史报告。
+    """
+    total = 0.0
+    seconds_sum = 0.0
+    for row in intervals or []:
+        seconds = float(row.get("actual_s") or 0.0)
+        step_target = float(row.get("target_power") or 0.0)
+        if seconds > 0 and step_target > 0:
+            total += seconds * step_target
+            seconds_sum += seconds
+    if len(intervals or []) > 1 and seconds_sum > 0:
+        return total / seconds_sum
+    return fallback
+
+
 class WorkoutSession:
     """一次"设定时长 + 设定功率"的骑行训练。"""
 
@@ -1227,6 +1249,9 @@ class WorkoutSession:
                          and self._sampled_s >= self.duration_s - slack)
 
         intervals = self._interval_breakdown(trace)
+
+        # 整次训练的"目标功率"：不能只报最后一段的值（见 weighted_target_power）
+        target = weighted_target_power(intervals, self.target_power)
         # 间歇训练单独给出"高强度段达标率"。把恢复段混进去算整体达标率是没有意义的
         # ——恢复段的目标是降下来，而功率物理上降不了那么快——所以那个数字会很惨，
         # 却完全反映不出你高强度段踩得好不好。

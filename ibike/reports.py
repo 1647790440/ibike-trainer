@@ -24,6 +24,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .session import weighted_target_power
 from .paths import reports_dir
 
 log = logging.getLogger("ibike.reports")
@@ -37,6 +38,12 @@ ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # 上限：一份报告大约 20-30KB（含降采样后的功率曲线），500 份约 15MB。
 # 超出后丢掉最旧的，并明确记一条日志——不静默删用户数据。
 MAX_REPORTS = 500
+
+
+def _weighted_target(intervals, fallback):
+    """见 session.weighted_target_power：延迟导入，避免循环依赖。"""
+    from .session import weighted_target_power
+    return weighted_target_power(intervals, fallback)
 
 
 class ReportStore:
@@ -155,7 +162,11 @@ class ReportStore:
             "finished_at": summary.get("finished_at"),
             "actual_s": summary.get("actual_s"),
             "planned_s": summary.get("planned_s"),
-            "target_power": summary.get("target_power"),
+            # 老报告里 target_power 存的是"最后一段"的功率（热身/冷身 80W），
+            # 读的时候按它存下来的分段重新加权算一遍，历史记录也能看对。
+            # 局部 import：避免 session ↔ reports 之间的循环依赖。
+            "target_power": _weighted_target(
+                summary.get("intervals") or [], summary.get("target_power")),
             "avg_power": summary.get("avg_power"),
             "normalized_power": summary.get("normalized_power"),
             "max_power": summary.get("max_power"),

@@ -383,6 +383,43 @@ async def test_rest_hr_is_recorded_separately() -> None:
         await hr.disconnect()
 
 
+async def test_target_power_is_weighted_not_last_step() -> None:
+    """报告里的"目标功率"要是整次训练的加权平均，不能是最后一段（冷身）的值。
+
+    真机踩过：自制课表「热身 80W → 60 分钟 110W → 冷身 80W」，报告里目标写成了
+    80W —— 那是热身/冷身的功率，看报告的人会以为整场都在骑 80W。
+    """
+    print("\n[3c] 目标功率按每段实际时长加权")
+    from ibike.session import WorkoutSession
+    from ibike.simulator import SimulatedTrainer
+
+    trainer = SimulatedTrainer(cadence=85.0)
+    await trainer.connect()
+    session = WorkoutSession(trainer)
+    try:
+        plan = [
+            {"name": "热身", "kind": "warmup", "duration_s": 6.0, "target_power": 80.0},
+            {"name": "高强度", "kind": "work", "duration_s": 18.0, "target_power": 140.0},
+            {"name": "冷身", "kind": "cooldown", "duration_s": 6.0, "target_power": 80.0},
+        ]
+        await session.start(80.0, duration_min=1, erg_mode="auto",
+                            plan=plan, plan_name="热身+高强度+冷身")
+        await asyncio.sleep(12.0)
+        await session.stop()
+        summary = session.summary or {}
+        target = summary.get("target_power")
+        check(target is not None, "报告里有目标功率", str(target))
+        check(target != 80 and target != 140,
+              "既不是最后一段（80）也不是最高段（140）", str(target))
+        expect = (80 * 6 + 140 * 18 + 80 * 6) / 30.0
+        check(abs(float(target) - expect) < 6.0,
+              "是按每段实际时长加权的平均（期望约 {:.0f}W）".format(expect),
+              "{}W".format(target))
+    finally:
+        await session.aclose()
+        await trainer.disconnect()
+
+
 async def test_early_stop_and_dismiss() -> None:
     print("\n[4] 提前结束 & 关闭总结")
     server = Server(use_simulator=True)
@@ -439,6 +476,7 @@ async def main() -> int:
     test_np_matches_reference()
     await test_summary_end_to_end()
     await test_rest_hr_is_recorded_separately()
+    await test_target_power_is_weighted_not_last_step()
     await test_early_stop_and_dismiss()
 
     print("\n" + "=" * 70)

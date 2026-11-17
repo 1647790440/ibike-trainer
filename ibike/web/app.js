@@ -21,6 +21,7 @@ const els = {
   btnHrDisconnect: $('btnHrDisconnect'),
   devicesView: $('devicesView'), trainingView: $('trainingView'),
   btnViewDevices: $('btnViewDevices'), btnViewTraining: $('btnViewTraining'),
+  btnViewReports: $('btnViewReports'), reportsView: $('reportsView'),
   connChips: $('connChips'),
   hrMaxInput: $('hrMaxInput'), hrRestInput: $('hrRestInput'),
   hrZoneMode: $('hrZoneMode'), hrLimitEnabled: $('hrLimitEnabled'),
@@ -336,13 +337,15 @@ function render(s) {
   els.setupPanel.classList.toggle('hidden', running || showingSummary);
   els.livePanel.classList.toggle('hidden', !showLive);
   els.summaryPanel.classList.toggle('hidden', !showingSummary);
-  els.reportsPanel.classList.toggle('hidden', running || showingSummary);
+  // 报告页上列表和总结是一上一下：看总结时不要把列表藏了，方便接着点下一份
+  els.reportsPanel.classList.toggle('hidden', false);
   els.btnStart.disabled = !connected || running || startPending;
 
-  // 新的训练报告落盘后刷新列表
+  // 新的训练报告落盘后刷新列表，并把用户带到报告页（训练结束要看的就是这份总结）
   if (hasSummary && s.summary.finished_at !== lastReportSyncKey) {
     lastReportSyncKey = s.summary.finished_at;
     loadReports();
+    switchView('reports');
   }
 
   // 按钮为什么点不了，直接写在按钮下面，别让人猜
@@ -1138,12 +1141,14 @@ async function refreshTestPlan() {
 let currentView = 'devices';
 
 function applyView(view) {
-  currentView = view === 'training' ? 'training' : 'devices';
+  currentView = ['training', 'reports'].indexOf(view) >= 0 ? view : 'devices';
   els.devicesView.classList.toggle('hidden', currentView !== 'devices');
   els.trainingView.classList.toggle('hidden', currentView !== 'training');
-  // 按 id 取而不是按 class 选择器：按钮就两个，写死更简单，测试也好断言
+  els.reportsView.classList.toggle('hidden', currentView !== 'reports');
+  // 按 id 取而不是按 class 选择器：按钮就三个，写死更简单，测试也好断言
   els.btnViewDevices.classList.toggle('on', currentView === 'devices');
   els.btnViewTraining.classList.toggle('on', currentView === 'training');
+  els.btnViewReports.classList.toggle('on', currentView === 'reports');
   // 状态胶囊只在训练页显示：设备页本身就有一块"骑行台"和一块"心率带"，
   // 各自带着状态和数据，再在顶上重复一遍纯属噪音。
   els.connChips.classList.toggle('hidden', currentView !== 'training');
@@ -2018,6 +2023,7 @@ async function openReport(id) {
     viewingReport = data.report;
     renderedSummaryKey = null;      // 强制重画，避免复用上一次的签名
     render(state);
+    switchView('reports');          // 报告有自己的页，打开就切过去
     window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch (e) {
     toast('打开报告失败：' + e.message);
@@ -2760,6 +2766,7 @@ function renderTestPlanPreview() {
 
 els.btnViewDevices.addEventListener('click', () => switchView('devices'));
 els.btnViewTraining.addEventListener('click', () => switchView('training'));
+els.btnViewReports.addEventListener('click', () => switchView('reports'));
 
 (async function boot() {
   try {

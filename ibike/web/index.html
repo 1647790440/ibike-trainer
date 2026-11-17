@@ -27,6 +27,7 @@
   <nav id="viewTabs" class="view-tabs">
     <button type="button" id="btnViewDevices" class="vtab on" data-view="devices">1 连接设备</button>
     <button type="button" id="btnViewTraining" class="vtab" data-view="training">2 训练</button>
+    <button type="button" id="btnViewReports" class="vtab" data-view="reports">3 报告</button>
     <span id="connChips" class="conn-chips"></span>
   </nav>
 
@@ -416,6 +417,19 @@
   </section>
 
   <!-- ================= 训练总结 ================= -->
+  <section class="card">
+    <div class="card-head">
+      <h2>运行日志</h2>
+      <button id="btnClearLog" class="btn btn-mini">清空</button>
+    </div>
+    <ul id="log" class="log"></ul>
+  </section>
+
+  </section><!-- /trainingView -->
+
+  <!-- ================= 视图 3：报告 =================
+       训练一结束就自动切到这里；列表和总结在同一页，看完一份可以直接点下一份。 -->
+  <section id="reportsView" class="hidden">
   <section id="summaryPanel" class="card hidden">
     <div class="summary-head">
       <div>
@@ -530,15 +544,8 @@
     <ul id="reportsList" class="report-list"></ul>
   </section>
 
-  <section class="card">
-    <div class="card-head">
-      <h2>运行日志</h2>
-      <button id="btnClearLog" class="btn btn-mini">清空</button>
-    </div>
-    <ul id="log" class="log"></ul>
-  </section>
+  </section><!-- /reportsView -->
 
-  </section><!-- /trainingView -->
 
   <footer class="foot">
     本地运行 · 骑行台通过蓝牙直连本机 · 关闭终端即停止

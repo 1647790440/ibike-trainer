@@ -628,8 +628,13 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   await context.openReport('r1');
   check(!getEl('summaryPanel').classList.contains('hidden'),
         '打开报告后总结面板显示出来');
-  check(getEl('reportsPanel').classList.contains('hidden'),
-        '打开报告后列表收起，不跟报告抢地方');
+  check(!!getEl('btnViewReports'), '导航里有第三个页签「3 报告」');
+  // 报告现在有自己的页面：点开一份报告会切到「3 报告」，列表和总结在同一页上下排，
+  // 看完一份可以直接点下一份（以前列表会被藏起来，等于锁死在那一份上）。
+  check(getEl('reportsView').classList.contains('hidden') === false,
+        '打开报告后切到「3 报告」页');
+  check(getEl('reportsPanel').classList.contains('hidden') === false,
+        '报告页上列表留着，方便接着看下一份');
   check(!getEl('btnDeleteReport').classList.contains('hidden'),
         '查看历史报告时出现「删除这份报告」');
   check(getEl('btnDismiss').textContent === '返回报告列表',
