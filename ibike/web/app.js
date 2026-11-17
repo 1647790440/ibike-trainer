@@ -2134,9 +2134,16 @@ let lastScanConn = { trainer: '', strap: '' };
 /* 把扫描结果画成两个列表。everyRender=false 时只在连接状态真的变了才重画——
    render() 被状态推送按 4Hz 调用，每次都重建列表会把点击吃掉。 */
 function renderFoundLists(force) {
+  // 只认**真的连着**的地址。
+  // 踩过的坑：心率带断开之后，服务端故意还留着那个对象（界面要能区分"没配过"
+  // 和"配过但没连上"），这里当时只看 address → 扫描列表把那一根标成「已连接」
+  // 并且把按钮 disable 掉。用户断开后想重连，点它没反应、也扫不出新状态，
+  // 只能结束训练重启程序（真机踩到过）。判断"连没连上"必须看 connected。
   const conn = {
-    trainer: ((state && state.trainer) || {}).address || '',
-    strap: ((state && state.hr_client) || {}).address || '',
+    trainer: (state && state.trainer && state.trainer.connected
+      && state.trainer.address) || '',
+    strap: (state && state.hr_client && state.hr_client.connected
+      && state.hr_client.address) || '',
   };
   if (!force && conn.trainer === lastScanConn.trainer
       && conn.strap === lastScanConn.strap) {
@@ -2496,6 +2503,11 @@ function renderHr(stateObj) {
   if (hr.stale || bpm == null) {
     els.hrHint.textContent = '已连接，但还没收到心率数据——检查带子有没有戴好、'
       + '电极有没有沾水（干的电极读数会不稳）。' + rr + '。';
+  } else if (stateObj.hr_source === 'trainer') {
+    // 没配心率带时才会用骑行台自带的心率字段。它是固件估的，实测会卡在一个
+    // 看着合理的数字上（和手表对不上），所以必须明说来源，别让人以为程序坏了。
+    els.hrHint.textContent = '心率来自骑行台自带的传感器（没配心率带时才会用它），'
+      + '数值可能不准——和手表差得多就戴上心率带。';
   } else {
     els.hrHint.textContent = '数据正常，' + rr + '。';
   }

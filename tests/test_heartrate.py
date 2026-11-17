@@ -569,6 +569,23 @@ async def test_trainer_and_strap_are_independent() -> None:
 # ======================================================================
 
 
+class TrainerWithHr(SimulatedTrainer):
+    """在 Indoor Bike Data 里带一个心率字段（值可调），模拟"骑行台自带心率"。
+
+    FitShow FS-BLE-V3X 真机实测：没接心率带时这个字段发 0；接了心率带但带子
+    没在出数时，它会顶上一个固件估出来的假值（看着还挺合理）。
+    """
+
+    def __init__(self, bpm, **kw):
+        super().__init__(**kw)
+        self.fake_hr = bpm
+
+    def _tick(self, dt):                           # noqa: D102 - 覆写模拟器
+        super()._tick(dt)
+        if self.latest:
+            self.latest["heart_rate_bpm"] = self.fake_hr
+
+
 async def test_trainer_heart_rate_field() -> None:
     """骑行台报 0 bpm 时不能当成有效心率。
 
@@ -579,18 +596,6 @@ async def test_trainer_heart_rate_field() -> None:
     print("\n[9] 骑行台自带心率字段为 0 时按无效处理")
     from ibike.session import WorkoutSession
     from ibike.simulator import SimulatedTrainer
-
-    class TrainerWithHr(SimulatedTrainer):
-        """在 Indoor Bike Data 里带一个心率字段（值可调）。"""
-
-        def __init__(self, bpm, **kw):
-            super().__init__(**kw)
-            self.fake_hr = bpm
-
-        def _tick(self, dt):                       # noqa: D102 - 覆写模拟器
-            super()._tick(dt)
-            if self.latest:
-                self.latest["heart_rate_bpm"] = self.fake_hr
 
     async def run_one(bpm):
         trainer = TrainerWithHr(bpm, cadence=85.0)
@@ -630,6 +635,97 @@ async def test_trainer_heart_rate_field() -> None:
           str(stats.get("avg_bpm")))
 
 
+async def test_strap_silences_trainer_hr() -> None:
+    """配了心率带之后，骑行台那个心率字段就不能再顶上来。
+
+    真机踩过：心率带连着但没出数（没戴好/被手表占着），骑行台的字段顶上，
+    卡在 76 bpm 一动不动（用户手表显示 130+），界面看着"有数据"实际全是假的；
+    用户断开带子重连又碰到"扫描列表说我已连接、点了没反应"，只能重启程序。
+    """
+    print("\n[10] 配了心率带后不再退回骑行台的心率字段")
+    from ibike.heartrate import SimulatedHeartRate
+    from ibike.session import WorkoutSession
+
+    class SilentStrap:
+        """连着，但一帧数据都不给——真机上就是带子没戴好/电极太干。"""
+
+        def __init__(self):
+            self.connected = True
+            self.latest = {}
+            self.last_data_time = 0.0
+            self.battery = None
+            self.rr_seen = False
+            self.HR_STALE_AFTER_S = 10.0
+
+        async def disconnect(self):
+            self.connected = False
+
+        def state(self):
+            return {"kind": "heart_rate", "connected": self.connected,
+                    "name": "Silent", "address": "AA:BB", "heart_rate": None,
+                    "rr_seen": False, "stale": True}
+
+    async def run(bpm, make_strap):
+        trainer = TrainerWithHr(bpm, cadence=85.0)
+        await trainer.connect()
+        hr = make_strap() if make_strap else None
+        if hr is not None and hasattr(hr, "connect"):
+            await hr.connect()
+        session = WorkoutSession(trainer, heart_rate=hr)
+        try:
+            await session.start(100.0, duration_min=5, erg_mode="auto")
+            await asyncio.sleep(2.5)
+            snap = session.snapshot()
+            await session.stop()
+            return snap, (session.summary or {})
+        finally:
+            await session.aclose()
+            await trainer.disconnect()
+            if hr is not None:
+                try:
+                    await hr.disconnect()
+                except Exception:
+                    pass
+
+    # 带子连着但不出数 → 宁可没有心率，也不能拿骑行台的假值
+    snap, summary = await run(76, SilentStrap)
+    check(snap.get("heart_rate") is None,
+          "带子不出数时不显示骑行台那个假心率", str(snap.get("heart_rate")))
+    check(snap.get("hr_source") is None, "也不声称来源是骑行台",
+          str(snap.get("hr_source")))
+    check(summary.get("heart_rate") is None,
+          "报告里根本不会出现心率区块（而不是混进假值）",
+          str(summary.get("heart_rate")))
+
+    # 带子被断开（对象还留着，界面要显示"配过但没连上"）→ 同样不许退回
+    def disconnected():
+        strap = SilentStrap()
+        strap.connected = False
+        return strap
+
+    snap2, _ = await run(76, disconnected)
+    check(snap2.get("heart_rate") is None, "带子断开后也不退回骑行台字段",
+          str(snap2.get("heart_rate")))
+
+    # 带子正常出数 → 用带子的值，骑行台那个 76 不能干扰
+    snap3, summary3 = await run(76, lambda: SimulatedHeartRate(rest_hr=60, max_hr=190))
+    check(snap3.get("heart_rate") is not None
+          and abs(snap3["heart_rate"] - 76.0) > 1.0,
+          "正常出数时用的是带子的心率（不是骑行台的 76）",
+          str(snap3.get("heart_rate")))
+    check(snap3.get("hr_source") == "strap", "来源标成心率带",
+          str(snap3.get("hr_source")))
+    stats = summary3.get("heart_rate") or {}
+    check(stats.get("source") == "strap",
+          "报告里记的是这场训练的主要来源（不是最后一帧）", str(stats.get("source")))
+
+    # 没配心率带时，骑行台自带的心率照旧可用（有些动感单车确实带心率）
+    snap4, _ = await run(132, None)
+    check(snap4.get("heart_rate") == 132.0, "没配带子时骑行台心率照常采用",
+          str(snap4.get("heart_rate")))
+    check(snap4.get("hr_source") == "trainer", "来源标成骑行台",
+          str(snap4.get("hr_source")))
+
 def main() -> int:
     print("=" * 70)
     print("心率带测试")
@@ -643,6 +739,7 @@ def main() -> int:
     asyncio.run(test_idle_live_data())
     asyncio.run(test_trainer_and_strap_are_independent())
     asyncio.run(test_trainer_heart_rate_field())
+    asyncio.run(test_strap_silences_trainer_hr())
 
     print("\n" + "=" * 70)
     if _failures:

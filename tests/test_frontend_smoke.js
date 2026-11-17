@@ -879,6 +879,19 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   check(getEl('hrHint').textContent.indexOf('RR') >= 0,
         '告诉用户这根带子支不支持 RR 间期', getEl('hrHint').textContent);
 
+  // 没配心率带时用的是骑行台自带的心率字段——要明说来源，否则用户以为程序坏了
+  context.render({
+    state: 'running', hr_source: 'trainer', heart_rate: 76,
+    trainer: { connected: true, kind: 'ble', capabilities: {} },
+    plan: [], is_interval: false, is_test: false, summary: null,
+    hr_client: { connected: true, name: '（骑行台）', battery: null,
+                 heart_rate: 76, rr_seen: false, stale: false,
+                 saved: { address: '', name: '' } },
+  });
+  check(getEl('hrHint').textContent.indexOf('骑行台') >= 0,
+        '心率来自骑行台时，提示里说明来源（和手表对不上时不至于以为程序坏了）',
+        getEl('hrHint').textContent);
+
   // 一次扫描同时填两份列表（心率带不再单独扫描）
   check(!elementListeners.some((l) => l.id === 'btnHrScan'),
         '界面上不再有单独的「扫描心率带」按钮');
@@ -891,6 +904,37 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
           '提示里同时报了骑行台和心率带的数量',
           getEl('scanHint').textContent);
   }
+
+  /* ---- 心率带断开之后必须还能点着重连（真机踩过的坑）---- */
+  console.log('\n[10a2] 断开心率带后，扫描列表里那一根要还能点');
+
+  const hrRow0 = () => getEl('hrList').children[0].children[0];   // <button>
+  const hrTag0 = () => hrRow0().children[1];                     // 标签
+  const strapState = (connected) => ({
+    state: 'idle', trainer: { connected: true, kind: 'ble', capabilities: {} },
+    plan: [], is_interval: false, is_test: false, summary: null,
+    hr_client: { connected: connected, name: 'Magene H603',
+                 address: 'AA:BB:CC:DD:EE:01',
+                 heart_rate: connected ? 132 : null, rr_seen: true,
+                 stale: !connected,
+                 saved: { address: 'AA:BB:CC:DD:EE:01', name: 'Magene H603' } },
+  });
+
+  // 真机的顺序：先连着（列表标已连接、按钮禁用），然后用户点了「断开」。
+  context.render(strapState(true));
+  check(hrTag0().textContent === '已连接', '连着的时候才标「已连接」',
+        hrTag0().textContent);
+  check(hrRow0().disabled === true, '连着的时候不接受重复点击',
+        'disabled=' + hrRow0().disabled);
+
+  // 断开后：服务端还留着对象（address 在、connected=false），列表必须恢复可点。
+  // 之前只看 address → 一直标「已连接」+ 按钮 disabled，用户点了没反应。
+  context.render(strapState(false));
+  check(hrTag0().textContent !== '已连接',
+        '断开后扫描列表不能还标着「已连接」', hrTag0().textContent);
+  check(hrRow0().disabled !== true,
+        '断开后那一根必须点得动（之前的 bug：被 disable 掉，点了没反应）',
+        'disabled=' + hrRow0().disabled);
 
   /* ---- 设备页拆成三块 ---- */
   console.log('\n[10b] 设备页三块：扫描/连接、骑行台状态、心率带状态');

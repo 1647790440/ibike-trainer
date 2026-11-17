@@ -326,6 +326,10 @@ class WorkoutSession:
         self.current_hr: Optional[float] = None
         # 这一帧心率是从哪来的："strap"（独立心率带）/ "trainer"（骑行台自带）/ None
         self.hr_source: Optional[str] = None
+        # 整场训练里每种来源各贡献了多少次有效读数。报告里记"主要来源"要用它——
+        # 只看最后一帧的话，刚好最后一拍没数据就成了空字符串，读报告的人不知道
+        # 这场心率到底是从哪来的。
+        self._hr_source_counts: Dict[str, int] = {}
         self.rr_intervals = 0          # 最近一帧带回来几个 RR 间期（有无 RR 靠它判断）
         self.hr_contact: Optional[str] = None
         # 平均/最大心率用独立累加器（10Hz），和踏频同一个道理：
@@ -503,6 +507,7 @@ class WorkoutSession:
         self.trainer_lost = False
         self.trainer_lost_reason = ""
         self.auto_paused = False
+        self._hr_source_counts = {}
         self._rests = []
         self._rest = None
         self._last_riding_hr = None
@@ -1177,7 +1182,8 @@ class WorkoutSession:
                 "max_bpm": round(self._hr_max, 0) if self._hr_max else None,
                 "sample_count": len(hr_samples),
                 "sampled_s": round(self._hr_time, 1),
-                "source": self.hr_source or "",
+                # 主要来源（而不是最后一帧的来源）：报告要能回答"这场心率是哪来的"
+                "source": self._dominant_hr_source(),
                 "rr_seen": bool(self.rr_intervals),
                 "zones": ([{"code": z["code"], "name": z["name"], "label": z["label"],
                             "min_bpm": z["min_bpm"], "max_bpm": z["max_bpm"],
@@ -1783,6 +1789,19 @@ class WorkoutSession:
         if hr_fresh is not None:
             self.current_hr = hr_fresh
             self.hr_contact = (hr_latest or {}).get("contact")
+            self._note_hr_source("strap")
+        elif self.heart_rate is not None:
+            # 配了独立心率带之后，就**不再**退回骑行台自带的心率字段。
+            #
+            # 真机踩过：心率带连着但没在出数（没戴好 / 被手表占着 / 电极太干），
+            # 骑行台那个字段就会顶上——它的数值是固件自己估的，会死死卡在一个
+            # "看着还挺合理"的数字上（实测 76 bpm 连续几十分钟一动不动），
+            # 和真实心率完全对不上。这种**假但合理**的读数比没有心率更误导人：
+            # 用户会以为程序坏了，实际是拿了个假数据在显示。
+            # 宁可显示"没有心率"，界面会提示"已连接，但还没收到数据"去引导检查带子。
+            self.current_hr = None
+            self.hr_source = None
+            self.rr_intervals = 0
         elif "heart_rate_bpm" in latest:
             bpm = float(latest["heart_rate_bpm"])
             # 骑行台自带的心率字段（FTMS Indoor Bike Data 里的那个）经常是 **0**：
@@ -1792,6 +1811,7 @@ class WorkoutSession:
             if HR_MIN_PLAUSIBLE <= bpm <= HR_MAX_PLAUSIBLE:
                 self.current_hr = bpm
                 self.hr_source = "trainer"
+                self._note_hr_source("trainer")
             else:
                 self.current_hr = None
                 self.hr_source = None
@@ -1816,6 +1836,15 @@ class WorkoutSession:
         self._hr_last_action = 0.0
         self._hr_step_locked = False
         self._hr_cap_note = ""
+
+    def _note_hr_source(self, name: str) -> None:
+        """记一次"这一帧的心率来自哪儿"，报告里取用得最多的那个。"""
+        self._hr_source_counts[name] = self._hr_source_counts.get(name, 0) + 1
+
+    def _dominant_hr_source(self) -> str:
+        if not self._hr_source_counts:
+            return ""
+        return max(self._hr_source_counts.items(), key=lambda kv: kv[1])[0]
 
     def _heart_rate_reading(self) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
         """读独立心率带的最新值。返回 ``(latest, bpm)``，无效时为 ``(None, None)``。
