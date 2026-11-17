@@ -1284,27 +1284,6 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   check(restTiles[1].children[1].textContent === '05:00',
         '瓦片里是合计时长', restTiles[1].children[1].textContent);
 
-  // 分段明细：有分段时必须真的画出来（去掉 # 列之后这里曾经残留 idx 引用，
-  // 导致一打开报告就抛 "idx is not defined"，而当时的 fixture 没有分段，漏掉了）
-  console.log('\n[10d] 分段明细');
-  context.render({
-    state: 'finished', trainer: { connected: true, kind: 'ble', capabilities: {} },
-    is_interval: false, is_test: false, plan: [],
-    summary: Object.assign({}, baseSum, {
-      finished_at: 1700009997, is_interval: true,
-      intervals: [
-        { name: '热身', kind: 'warmup', target_power: 80, avg_power: 79, in_zone_pct: null },
-        { name: '高强度', kind: 'work', target_power: 110, avg_power: 110, in_zone_pct: 58 },
-      ],
-    }),
-  });
-  const ivChildren = getEl('sumIntervals').children;
-  check(ivChildren.length >= 3, '表头 + 两行分段都画出来了', String(ivChildren.length) + ' 行');
-  check(ivChildren[0].children.length === 4, '表头是四列（# 列已去掉）',
-        String(ivChildren[0].children.length) + ' 列');
-  check(ivChildren[1].children[0].textContent === '热身', '第一行是分段名，不再是序号',
-        ivChildren[1].children[0].textContent);
-
   // 没有休息段的报告：整块不显示
   context.render({
     state: 'finished', trainer: { connected: true, kind: 'ble', capabilities: {} },

@@ -61,7 +61,6 @@ const els = {
   ivChart: $('ivChart'), ivNext: $('ivNext'),
   btnSkip: $('btnSkip'), btnSkipBack: $('btnSkipBack'),
   timeLabel: $('timeLabel'), totalTime: $('totalTime'),
-  sumIntervalSection: $('sumIntervalSection'), sumIntervals: $('sumIntervals'),
   sumModeSection: $('sumModeSection'), sumModeChanges: $('sumModeChanges'),
   sumRestSection: $('sumRestSection'), sumRestStats: $('sumRestStats'),
   sumRests: $('sumRests'),
@@ -869,47 +868,6 @@ function renderSummary(sum) {
     els.sumModeChanges.appendChild(row);
   });
 
-  // 分段明细：间歇训练最有价值的反馈粒度就是"每组"，整体平均会把踩崩的一组
-  // 和踩得漂亮的一组平均掉，看不出问题在哪。
-  const rows = sum.intervals || [];
-  els.sumIntervalSection.classList.toggle('hidden', rows.length === 0);
-  els.sumIntervals.innerHTML = '';
-  if (rows.length) {
-    const head = document.createElement('div');
-    head.className = 'iv-head-row';
-    ['分段', '目标', '实际', '达标'].forEach((text) => {
-      const span = document.createElement('span');
-      span.textContent = text;
-      head.appendChild(span);
-    });
-    els.sumIntervals.appendChild(head);
-
-    rows.forEach((row) => {
-      const el = document.createElement('div');
-      el.className = 'iv-row ' + (row.kind || '');
-
-      const name = document.createElement('span');
-      name.className = 'r-name';
-      name.textContent = row.name + (row.zone ? ' · ' + row.zone : '');
-      name.title = row.name + (row.zone ? ' · ' + row.zone : '');
-
-      const target = document.createElement('span');
-      target.className = 'r-num';
-      target.textContent = Math.round(row.target_power) + 'W';
-
-      const avg = document.createElement('span');
-      avg.className = 'r-num';
-      avg.textContent = row.avg_power == null ? '--' : Math.round(row.avg_power) + 'W';
-
-      const pct = document.createElement('span');
-      const good = row.in_zone_pct != null && row.in_zone_pct >= 80;
-      pct.className = 'r-num ' + (row.in_zone_pct == null ? '' : (good ? 'r-good' : 'r-bad'));
-      pct.textContent = row.in_zone_pct == null ? '--' : row.in_zone_pct.toFixed(0) + '%';
-
-      el.append(name, target, avg, pct);
-      els.sumIntervals.appendChild(el);
-    });
-  }
 }
 
 /* ------------------------------------------------------------------ *
