@@ -824,32 +824,45 @@ function renderSummary(sum) {
       cell.append(lb, val, un);
       els.sumRestStats.appendChild(cell);
     });
+    // 休息段自己的行结构（四列）：时刻 / 时长 / 原因 / 心率变化。
+    // 以前复用了分段明细那套 .iv-row（网格列宽是给"目标/实际/达标"定的），
+    // 结果"时长 · 原因"被塞进 62px 的窄列里，后面的字全被省略号吃掉。
+    const restHead = document.createElement('div');
+    restHead.className = 'rv-head';
+    ['时刻', '时长', '原因', '心率变化'].forEach((text) => {
+      const span = document.createElement('span');
+      span.textContent = text;
+      restHead.appendChild(span);
+    });
+    els.sumRests.appendChild(restHead);
+
     rests.forEach((r) => {
       const row = document.createElement('div');
-      row.className = 'iv-row';
+      row.className = 'rv-row';
       const at = document.createElement('span');
-      at.className = 'r-idx';
+      at.className = 'rv-at';
       at.textContent = fmtClock(r.started_at || 0);
       const dur = document.createElement('span');
-      dur.className = 'r-name';
-      dur.textContent = fmtClock(r.duration_s || 0) + ' · ' + (r.reason || '休息');
+      dur.className = 'rv-dur';
+      dur.textContent = fmtClock(r.duration_s || 0);
+      const why = document.createElement('span');
+      why.className = 'rv-why';
+      why.textContent = r.reason || '休息';
+      why.title = r.reason || '休息';        // 窄屏放不下时鼠标悬停能看到全文
       const hr = document.createElement('span');
-      hr.className = 'r-num';
-      hr.style.gridColumn = '3 / -1';
-      hr.style.textAlign = 'left';
+      hr.className = 'rv-hr';
       if (r.hr_start != null && r.hr_end != null) {
-        let text = '心率 ' + Math.round(r.hr_start) + ' → ' + Math.round(r.hr_end)
-          + ' bpm';
+        let text = Math.round(r.hr_start) + ' → ' + Math.round(r.hr_end) + ' bpm';
         if (r.hr_min != null && r.hr_min < Math.min(r.hr_start, r.hr_end)) {
           text += '（最低 ' + Math.round(r.hr_min) + '）';
         }
         if (r.hr_drop_60s != null) text += ' · 60 秒回落 ' + Math.round(r.hr_drop_60s) + ' bpm';
         hr.textContent = text;
       } else {
-        hr.textContent = '这一段没读到心率（心率带断了或没戴）';
-        hr.style.color = 'var(--muted)';
+        hr.textContent = '没读到心率（带子断了或没戴）';
+        hr.className = 'rv-hr rv-hr--none';
       }
-      row.append(at, dur, hr);
+      row.append(at, dur, why, hr);
       els.sumRests.appendChild(row);
     });
   }

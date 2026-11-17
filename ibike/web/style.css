@@ -797,6 +797,34 @@ canvas#ivChart {
 }
 
 /* 心率区间分布条（训练报告里） */
+/* 休息段明细：自己的四列网格（时刻 / 时长 / 原因 / 心率变化），
+   别复用分段明细那套列宽，否则"原因"会被挤成省略号 */
+.rv-table { max-height: 320px; overflow-y: auto; }
+.rv-head {
+  display: grid; grid-template-columns: 52px 56px minmax(90px, 1fr) minmax(150px, 1.2fr);
+  gap: 8px; font-size: 10px; color: #4a5a6e; padding: 0 8px 2px;
+}
+.rv-head span:nth-child(n+3) { text-align: left; }
+.rv-row {
+  display: grid; grid-template-columns: 52px 56px minmax(90px, 1fr) minmax(150px, 1.2fr);
+  align-items: center; gap: 8px; font-size: 12px;
+  padding: 6px 8px; border-radius: 7px; background: var(--card-2);
+}
+.rv-row + .rv-row { margin-top: 4px; }
+.rv-at, .rv-dur { color: var(--muted); font-variant-numeric: tabular-nums; }
+.rv-why { color: var(--text); }
+.rv-hr { color: var(--muted); font-variant-numeric: tabular-nums; }
+.rv-hr--none { color: var(--muted); font-style: normal; }
+
+@media (max-width: 560px) {
+  .rv-head { display: none; }
+  .rv-row {
+    grid-template-columns: 52px 1fr;
+    row-gap: 2px; font-size: 11px;
+  }
+  .rv-why, .rv-hr { grid-column: 2 / -1; }
+}
+
 .hr-zones {
   display: grid;
   gap: 4px;

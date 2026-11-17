@@ -1267,15 +1267,16 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   });
   check(!getEl('sumRestSection').classList.contains('hidden'),
         '有休息段时显示这一块');
-  check(getEl('sumRests').children.length === 2, '两段休息各一行',
+  check(getEl('sumRests').children.length === 3, '表头 + 两段休息各一行',
         String(getEl('sumRests').children.length) + ' 行');
-  const restRow = getEl('sumRests').children[0].children;
-  check(restRow[1].textContent.indexOf('骑行台掉线') >= 0,
-        '行里有休息时长和原因', restRow[1].textContent);
-  check(restRow[2].textContent.indexOf('152') >= 0
-        && restRow[2].textContent.indexOf('112') >= 0
-        && restRow[2].textContent.indexOf('60 秒回落 21') >= 0,
-        '行里有心率变化和 60 秒回落', restRow[2].textContent);
+  const restRow = getEl('sumRests').children[1].children;   // [0] 是表头
+  check(restRow[1].textContent === '04:00', '时长单独一列', restRow[1].textContent);
+  check(restRow[2].textContent.indexOf('骑行台掉线') >= 0,
+        '原因单独一列（不再被挤进窄列截断）', restRow[2].textContent);
+  check(restRow[3].textContent.indexOf('152') >= 0
+        && restRow[3].textContent.indexOf('112') >= 0
+        && restRow[3].textContent.indexOf('60 秒回落 21') >= 0,
+        '心率变化和 60 秒回落都在', restRow[3].textContent);
   // 休息段统计改成和训练总结同一套瓦片（.metric：标签 / 数值 / 单位）
   const restTiles = getEl('sumRestStats').children;
   check(restTiles.length === 3, '休息段统计是三块瓦片', String(restTiles.length) + ' 块');
