@@ -58,22 +58,6 @@ cd ibike-trainer
 > **macOS 首次运行**必须在弹窗里允许蓝牙权限（在
 > **系统设置 → 隐私与安全性 → 蓝牙** 里勾选你的终端 App，比如「终端」或「iTerm」），
 > 否则搜不到任何设备。
-
-**懒人版：打包成 App，以后双击启动，不用开终端**（macOS）
-
-```bash
-./packaging/make_app.sh      # 生成 ~/Applications/iBike.app，只需跑一次
-```
-
-之后双击 `iBike.app` 就行：服务在后台起来、浏览器自动打开、**菜单栏会常驻一个
-「iBike · 待机」**——点开能看到实时状态（骑行中 132W 1:35）、打开控制台、看日志、
-退出。退出时会给服务发 SIGTERM，走它自己的优雅收尾（存报告、关悬浮窗），不会丢数据。
-
-- 它**只是壳**：不打包 Python，所以**改代码不用重新打包**，退出 App 再双击就生效
-- 数据还是项目目录下的 `data/`，和 `./run.sh` 是同一份历史
-- 蓝牙权限从此挂在「iBike」这个 App 上，不再需要给终端授权（首次启动会弹一次）
-- 项目目录搬家后要重新跑一次 `make_app.sh`；分发给别人需要签名+公证，见
-  [docs/packaging-options.md](docs/packaging-options.md)
 >
 > **Windows**：`run.sh` 是 bash 脚本，用 Git Bash 或 WSL 跑；也可以手动
 > `python -m venv .venv` 装好依赖后跑 `python main.py`。Windows 路径没有实测过，
@@ -325,8 +309,8 @@ issue 里，才有可能加上适配。
 | [docs/design-notes.md](docs/design-notes.md) | 控功率两条路径（原生 ERG / 闭环阻力）、自动降级的判定、诊断脚本的来龙去脉、报告存储、已知限制 |
 | [docs/heart-rate-features.md](docs/heart-rate-features.md) | 心率功能的候选清单（已实现哪些、还可以做什么） |
 | [docs/apple-watch-heart-rate.md](docs/apple-watch-heart-rate.md) | 为什么用心率带而不是 Apple Watch（调研笔记） |
+| [docs/packaging-options.md](docs/packaging-options.md) | 想做成桌面 App / 手机 App 的可行性评估（含难度、坑、参考链接） |
 | [docs/overlay.md](docs/overlay.md) | 悬浮窗：命令行参数、实现原理（原生窗口那几个关键属性）、已知限制 |
-| [docs/packaging-options.md](docs/packaging-options.md) | 打包成 App 的取舍（已实现的菜单栏启动器 / 安卓 / 原生重写的评估） |
 
 ## 开发
 
@@ -335,7 +319,7 @@ issue 里，才有可能加上适配。
 node tests/test_frontend_smoke.js       # 前端冒烟（需要 node）
 ```
 
-代码结构和 17 套测试的说明见 **[docs/design-notes.md](docs/design-notes.md)** 末尾。
+代码结构和 16 套测试的说明见 **[docs/design-notes.md](docs/design-notes.md)** 末尾。
 全部测试都基于模拟设备，**不需要任何硬件**；跑测试会把数据写到临时目录，
 不会碰你的真实训练记录。
 

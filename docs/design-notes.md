@@ -148,25 +148,6 @@ k ← (1-α)·k + α·(P / (R·C))
 - **踏频不是唯一证据**：同一台台子的踏频字段在重新上电后可能一直是 0，只认踏频会
   永久卡死。功率是实打实的输出，功率达标同样算"在骑"。
 
-## .app：为什么是个"壳"而不是自包含打包
-
-双击启动（`packaging/make_app.sh` → `~/Applications/iBike.app`）用的是**壳方案**：
-App 里只有一份 Info.plist + 一个可执行脚本，`exec` 项目自己的 `.venv/bin/python
-packaging/launcher.py`。选它的理由是**改代码不用重新打包**（重启 App 就生效）——
-这个项目还在频繁改，自包含打包会把"改一行 → 重新打包 → 重启"变成日常成本。
-
-启动器本身只做四件事：起服务子进程（日志 `~/Library/Logs/iBike.log`）、等
-`/api/state` 真能应答再开浏览器、菜单栏显示实时状态、退出时 SIGTERM 走优雅收尾。
-数据目录的优先级：`IBIKE_DATA_DIR` > 项目里的 `data/` > `~/Library/Application
-Support/iBike`——**绝不写进 .app 里面**（升级时整个包会被替换，报告会全没）。
-第二次双击不会起第二个服务：探到端口已经有本程序应答就直接开控制台。
-
-三个坑（都踩过，`packaging/launcher.py` 里有注释）：
-1. Info.plist 缺 `NSBluetoothAlwaysUsageDescription` → 一碰蓝牙被系统直接杀进程。
-2. pyobjc 把 `NSObject` 子类里的**普通方法当 ObjC 选择器**：带参数的辅助方法会报
-   `BadPrototypeError`（这次是 `_item`/`_tick`），辅助函数必须放模块级。
-3. 菜单栏那层崩了会把服务留成孤儿 → `run_menu_bar` 外面套 `try/finally: stop()`。
-
 ## 心率来源：配了心率带就只认心率带
 
 骑行台（FTMS Indoor Bike Data）里有个心率字段，很多固件在**没接心率带时也照发**：
@@ -382,9 +363,8 @@ Support/iBike`——**绝不写进 .app 里面**（升级时整个包会被替�
 ├── scan.py              诊断脚本：dump 蓝牙设备的服务/特征值结构
 ├── selftest.py          自检：协议 + 两条控制路径 + 自动降级 + HTTP 接口
 ├── overlay.py           悬浮窗：macOS 原生透明置顶窗口（pyobjc，见 docs/overlay.md）
-├── packaging/           双击即用的 .app（菜单栏启动器：launcher.py + make_app.sh）
 ├── run-overlay.sh       单独启动悬浮窗（一般用网页上的按钮）
-├── tests/               16 套测试（见下）
+├── tests/               15 套测试（见下）
 ├── tools/
 │   ├── make_sample_reports.py  生成示例训练报告
 │   └── tune_closed_loop.py     闭环控制器调参：打印功率轨迹和波动幅度
@@ -428,7 +408,6 @@ BLE 外设把真实的 `TrainerClient` 跑起来，覆盖服务发现、能力�
 .venv/bin/python tests/test_server_hardening.py  # 服务端加固（实时推送/断开存报告/跨站/畸形输入）
 .venv/bin/python tests/test_trainer_loss.py      # 掉线挂起 / 重连接回 / 自动重连 / 链路半开 / 显式断开
 .venv/bin/python tests/test_overlay_toggle.py    # 悬浮窗开关（起停/崩溃检测/端口/信号收尾/自动退出）
-.venv/bin/python tests/test_app_launcher.py      # .app 启动器（数据目录/探活/子进程/包结构/端到端）
 .venv/bin/python tests/test_auto_pause.py        # 自动暂停/自动继续（含软暂停、坡道测试护栏）
 node tests/test_frontend_smoke.js                # 前端冒烟（需要 node）
 ```
@@ -453,8 +432,6 @@ node tests/test_frontend_smoke.js                # 前端冒烟（需要 node）
 - 骑行台掉线只把训练**挂起**（计时冻结、不写报告），重连要能接回同一场训练；
   只有「结束」/跑满时长/显式「断开」才收尾
 - 悬浮窗开关：起停子进程、进程自己挂掉要如实报"没开"、端口要传对、服务退出要一起收掉
-- .app 启动器：数据目录优先级（绝不写进 .app）、探活后才开浏览器、退出走 SIGTERM
-  优雅收尾、包结构里有蓝牙权限说明（少了会被系统直接杀掉）
 - 心率来源：带子不出数时不能拿骑行台的假心率顶上；没配带子时才用骑行台字段；
   报告记的是主导来源而不是最后一帧
 - 悬浮窗自动退出：从没连上过不退出（单独跑时等人）、连上过又断了要退出、关不关可配
