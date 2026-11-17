@@ -132,6 +132,34 @@ SwiftUI（macOS）或 Kotlin（安卓）重写后端，前端 WebView 复用。
 
 ---
 
+## 附录：曾经试做过一次（已回退，仅记录经验）
+
+2026-11 试做过一版「菜单栏 .app」（壳方案：不打包 Python，只引用项目目录 + `.venv`），
+能跑通但**已整体回退**——当时的判断是"先把程序本身调完，再决定要不要打包"。
+两个坑是真金白银踩出来的，将来再做直接照这个来：
+
+1. **主可执行文件必须是编译出来的 Mach-O，不能是 shell 脚本。**
+   脚本当 `CFBundleExecutable` 时，LaunchServices 把主进程算成 `/bin/bash`，
+   而 **TCC 的权限归属跟着主进程走**；bash 没有用途说明字符串 → App 访问
+   `~/Desktop`（项目在桌面上）时被**静默拒绝**，连授权弹窗都不弹，表现就是
+   "双击完全没反应"。系统日志的指纹：
+
+   ```
+   (Sandbox) System Policy: Python(12345) deny(1) file-read-data \
+       /Users/xxx/Desktop/ibike/.venv/pyvenv.cfg
+   ```
+
+   解法：写个几十行的 C 启动器（只做自检 + exec python），编译进
+   `Contents/MacOS/iBike`，权限归属才是 App 自己。
+2. **Info.plist 要有 `NSDesktopFolderUsageDescription`**（以及文稿/下载的对应键），
+   否则系统没有可展示的用途说明，同样会静默拒绝。
+
+另外还有两条通用经验：**Finder 启动的 App 没有 stdout，必须自己写日志文件**
+（这次就是靠"日志一行都没写"才定位到 python 死在 `import site` 之前）；
+**菜单栏/装包那层崩了要把子进程收掉**，否则服务会变成孤儿进程接管着蓝牙。
+
+---
+
 ## 参考
 
 - [bleak Android 后端（BeeWare/Briefcase + Chaquopy）](https://bleak.readthedocs.io/en/latest/backends/android.html)

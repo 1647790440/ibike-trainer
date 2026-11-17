@@ -18,6 +18,7 @@ env/
 # 会话工具（DeepSeek Harness 的 skills / 临时工具）——和本项目无关，不进仓库
 .dsh/
 .tools/
+.hallmark/
 
 # 编辑器
 .idea/
