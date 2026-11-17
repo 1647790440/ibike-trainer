@@ -38,8 +38,6 @@ DEFAULT_PORT = 8765
 READY_TIMEOUT_S = 25.0           # 等服务起来的耐心（首次启动要建对象、扫 BLE，慢一点）
 STOP_TIMEOUT_S = 8.0             # 等服务优雅退出的耐心（它自己做收尾约 0.1s）
 LOG_PATH = Path.home() / "Library" / "Logs" / "iBike.log"
-# 启动器自己的轨迹：从 Finder/Dock 启动时 stdout 是黑洞，出问题只能靠它。
-LAUNCH_LOG = Path.home() / "Library" / "Logs" / "iBike-launcher.log"
 APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "iBike"
 
 STATE_TEXT = {
@@ -85,17 +83,6 @@ def resolve_data_dir(project: Path) -> Path:
     if project_data.is_dir():
         return project_data
     return APP_SUPPORT_DIR
-
-
-def trace(message: str) -> None:
-    """把启动过程记到文件里。绝不因为写日志失败而影响启动。"""
-    try:
-        LAUNCH_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with open(LAUNCH_LOG, "a", encoding="utf-8") as fh:
-            fh.write("{}  {}\n".format(
-                time.strftime("%Y-%m-%d %H:%M:%S"), message))
-    except OSError:
-        pass
 
 
 def state_url(port: int) -> str:
@@ -357,8 +344,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="别自动打开浏览器")
     args = parser.parse_args(argv)
 
-    trace("启动器开始：argv={} cwd={} exe={}".format(
-        sys.argv[1:], os.getcwd(), sys.executable))
     project = project_root()
     main_py = project / "main.py"
     if not main_py.exists():
@@ -371,7 +356,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         python = sys.executable
 
     data_dir = resolve_data_dir(project)
-    trace("项目={} python={} 数据目录={}".format(project, python, data_dir))
     server = ServerProcess(python, main_py, args.port, data_dir)
 
     # 已经在跑（比如又双击了一次）：不重复启动，直接把控制台打开
@@ -387,7 +371,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             _alert("端口 {} 被别的程序占用了，试试 --port 8766".format(args.port))
         return 2
 
-    trace("启动服务子进程…")
     server.start()
     if not server.wait_ready():
         detail = tail(LOG_PATH)
@@ -410,18 +393,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("  已优雅停止 ✓")
         return 0
 
-    trace("服务已就绪（端口 {}），进入菜单栏".format(args.port))
-    print("iBike 服务已就绪（端口 {}），日志：{}".format(args.port, LOG_PATH),
-          flush=True)
+    print("iBike 服务已就绪（端口 {}），日志：{}".format(args.port, LOG_PATH))
     try:
-        import AppKit  # noqa: F401  在这里就试着导入，好让失败早早暴露在日志里
-        trace("pyobjc/AppKit 可用，创建菜单栏")
         return run_menu_bar(server, args.port, open_browser=not args.no_browser)
-    except BaseException as exc:                 # noqa: BLE001
-        import traceback
-        trace("菜单栏出错：{}".format(exc))
-        trace(traceback.format_exc())
-        raise
     finally:
         # 菜单栏那层要是崩了，也不能把服务留成孤儿进程（它接管着蓝牙和报告）
         server.stop()
@@ -443,11 +417,4 @@ def _alert(text: str) -> None:
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except SystemExit:
-        raise
-    except BaseException:                        # noqa: BLE001
-        import traceback
-        trace("致命错误：\n" + traceback.format_exc())
-        raise
+    sys.exit(main())

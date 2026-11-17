@@ -39,7 +39,7 @@
 
 日常自用显然是壳更划算；哪天要给别人用再上级别 1。
 
-**四个真踩过的坑**（都在 `packaging/app_main.c` / `launcher.py` 里写明了）：
+**三个真踩过的坑**（都在 `packaging/launcher.py` 里写明了）：
 
 1. **Info.plist 必须有 `NSBluetoothAlwaysUsageDescription`**，少了它 macOS 一碰蓝牙
    **直接杀进程**（不是弹窗拒绝），排查起来非常不直观。`make_app.sh` 里已经写好。
@@ -48,22 +48,6 @@
    放模块级。
 3. **菜单栏那层崩了不能把服务留成孤儿**（它接管着蓝牙和报告）：`run_menu_bar`
    外面套了 `try/finally: server.stop()`。
-4. **主可执行文件必须是编译出来的 Mach-O，不能是 shell 脚本**（这条最坑，实测
-   "双击完全没反应"）。原因：脚本当 `CFBundleExecutable` 时 LaunchServices 把
-   主进程算成 `/bin/bash`，而 **TCC 的权限归属跟着主进程走**——bash 没有用途说明
-   字符串，于是访问 `~/Desktop`（项目就在桌面上）时系统**静默拒绝**，连授权弹窗
-   都不弹。日志里的指纹是：
-
-   ```
-   (Sandbox) System Policy: Python(12345) deny(1) file-read-data \
-       /Users/xxx/Desktop/ibike/.venv/pyvenv.cfg
-   ```
-
-   换成 C 写的小启动器（`packaging/app_main.c`，编译进 `Contents/MacOS/iBike`）
-   之后，权限归属就是 iBike 自己，`NSDesktopFolderUsageDescription` 才生效。
-   顺带在 C 里做了自检：读不到 `pyvenv.cfg` 就直接弹窗说清楚该去哪个设置里勾选，
-   而不是静默退出。项目放在 `~/Desktop` 是**受保护目录**；放到 `~/` 下别的
-   非保护目录（比如 `~/ibike`）就完全不需要这一步授权。
 
 ## 现状：为什么这件事比一般情况容易
 
