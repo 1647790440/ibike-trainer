@@ -334,7 +334,9 @@ function render(s) {
     switchView('training');
   }
 
-  els.setupPanel.classList.toggle('hidden', running || showingSummary);
+  // 只看训练中的状态：总结已经搬到「3 报告」页了，看报告不该把训练页的设定藏起来
+  // （之前这里还带着 showingSummary，于是"看完报告切回训练页只剩运行日志"）。
+  els.setupPanel.classList.toggle('hidden', running);
   els.livePanel.classList.toggle('hidden', !showLive);
   els.summaryPanel.classList.toggle('hidden', !showingSummary);
   // 报告页上列表和总结是一上一下：看总结时不要把列表藏了，方便接着点下一份

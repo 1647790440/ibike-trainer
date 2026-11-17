@@ -635,6 +635,12 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
         '打开报告后切到「3 报告」页');
   check(getEl('reportsPanel').classList.contains('hidden') === false,
         '报告页上列表留着，方便接着看下一份');
+
+  // 看完报告切回训练页：设定面板必须还在（之前只剩运行日志，因为可见性判断里
+  // 还带着"正在看总结"这个条件，而总结已经搬到报告页了）。
+  context.switchView('training');
+  check(getEl('setupPanel').classList.contains('hidden') === false,
+        '看完报告切回训练页，设定面板还在');
   check(!getEl('btnDeleteReport').classList.contains('hidden'),
         '查看历史报告时出现「删除这份报告」');
   check(getEl('btnDismiss').textContent === '返回报告列表',

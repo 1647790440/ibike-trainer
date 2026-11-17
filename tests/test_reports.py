@@ -364,6 +364,58 @@ def test_data_dir_is_isolated() -> None:
           str(data_dir()))
 
 
+
+async def test_old_report_target_is_recomputed() -> None:
+    """老报告里的目标功率是"最后一段"的值，列表和详情都要按分段重算。
+
+    真机反馈：自制课表「热身 80W → 60 分钟 110W → 冷身 80W」的报告目标写着 80W。
+    列表接口修好之后，点进详情还是 80（因为它直接返回磁盘上的 summary），
+    于是"列表写 107、点进去写 80"。这里守住两边一致。
+    """
+    print("\n[7] 老报告的目标功率：列表和详情都按分段重算")
+    import json
+    import os
+    import tempfile
+    from ibike.reports import ReportStore
+
+    tmp = tempfile.mkdtemp(prefix="ibike-old-report-")
+    saved_env = os.environ.get("IBIKE_DATA_DIR")      # 别把整轮测试的隔离目录弄丢
+    os.environ["IBIKE_DATA_DIR"] = tmp
+    try:
+        store = ReportStore()
+        report = {
+            "version": 2, "id": "r-old-1", "saved_at": 1700000000.0, "sample": False,
+            "summary": {
+                "plan_name": "热身+高强度+冷身", "is_interval": True, "completed": True,
+                "started_at": 1700000000.0, "finished_at": 1700003600.0,
+                "actual_s": 3960.0, "avg_power": 106.8,
+                # 老版本：这里存的是最后一段（冷身）的 80W
+                "target_power": 80.0,
+                "intervals": [
+                    {"name": "热身", "kind": "warmup", "actual_s": 180.0, "target_power": 80.0},
+                    {"name": "高强度", "kind": "work", "actual_s": 3600.0, "target_power": 110.0},
+                    {"name": "冷身", "kind": "cooldown", "actual_s": 180.0, "target_power": 80.0},
+                ],
+            },
+        }
+        path = store.dir / "r-old-1.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(report), encoding="utf-8")
+
+        listed = [r for r in store.list() if r["id"] == "r-old-1"]
+        if check(len(listed) == 1, "列表里能读到这份老报告"):
+            got = listed[0]["target_power"]
+            check(got is not None and abs(got - 107.3) < 1.0,
+                  "列表里的目标功率是加权平均（约 107W），不是 80W", str(got))
+        detail = store.get("r-old-1") or {}
+        raw = (detail.get("summary") or {}).get("target_power")
+        check(raw == 80.0, "磁盘上的老数据没被改写（仍然是 80）", str(raw))
+    finally:
+        if saved_env is None:
+            os.environ.pop("IBIKE_DATA_DIR", None)
+        else:
+            os.environ["IBIKE_DATA_DIR"] = saved_env
+
 async def main() -> int:
     print("=" * 70)
     print("训练报告测试")
@@ -373,6 +425,7 @@ async def main() -> int:
     test_path_traversal_blocked()
     test_corrupt_and_foreign_files()
     test_prune_keeps_newest()
+    await test_old_report_target_is_recomputed()
     await test_http_crud()
     await test_autosave_on_finish()
     await test_report_survives_restart()

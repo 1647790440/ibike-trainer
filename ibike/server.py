@@ -32,6 +32,7 @@ from .ftptest import clamp_params as clamp_test_params, public_tests
 from .reports import ReportStore
 from .settings import Settings
 from .session import (ERG_AUTO, STATE_IDLE, STATE_PAUSED, STATE_RUNNING,
+                      weighted_target_power,
                       WorkoutSession)
 from .simulator import SimulatedTrainer
 from .trainer import TrainerClient, TrainerError
@@ -1307,6 +1308,12 @@ class Server:
         if report is None:
             return web.json_response({"ok": False, "error": "找不到这份训练报告"},
                                      status=404)
+        # 老报告里 target_power 存的是最后一段（热身/冷身 80W）。列表接口已经按
+        # 分段重算了，详情这里也要算，否则会出现"列表写 107、点进去写 80"。
+        summary = report.get("summary")
+        if isinstance(summary, dict):
+            summary["target_power"] = weighted_target_power(
+                summary.get("intervals") or [], summary.get("target_power"))
         return web.json_response({"ok": True, "report": report})
 
     async def handle_report_delete(self, request: web.Request) -> web.Response:
