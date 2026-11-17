@@ -958,3 +958,46 @@ canvas#ivChart {
   .dev-metrics { grid-template-columns: repeat(2, 1fr); }
   .dev-metrics-hr { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* ==================================================================
+   桌面端布局：手机端是一列到底，桌面（≥980px）把宽度用起来。
+   只动容器宽度和两栏排布，配色、字号、组件一律不变。
+   ================================================================== */
+@media (min-width: 980px) {
+  .app {
+    max-width: 1180px;
+    padding: 20px 24px calc(32px + env(safe-area-inset-bottom));
+    gap: 16px;
+  }
+
+  /* 设备页：左边「扫描与连接」占满两行，右边骑行台 / 心率带上下排 */
+  #devicesView {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+  #devicesView > .card:nth-child(1) { grid-row: span 2; }
+
+  /* 训练页：实时/总结独占整行（它们是主角），设定和报告并排 */
+  #trainingView {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+  #livePanel, #summaryPanel { grid-column: 1 / -1; }
+  #reportsPanel { grid-column: 2; }
+  #trainingView > .card:last-child { grid-column: 1 / -1; }
+
+  /* 读数在宽屏上放大一档，骑行中一眼可见 */
+  .m-value, .metric-v { font-size: 30px; }
+  .metrics { gap: 10px; }
+  #chart { height: 220px; }
+}
+
+@media (min-width: 1600px) {
+  .app { max-width: 1360px; }
+  .m-value, .metric-v { font-size: 34px; }
+  #chart { height: 260px; }
+}
