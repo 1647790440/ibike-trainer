@@ -82,7 +82,7 @@ const els = {
   sumMode: $('sumMode'), sumInZone: $('sumInZone'), sumInZoneBar: $('sumInZoneBar'),
   sumQualityLabel: $('sumQualityLabel'), sumQualityNote: $('sumQualityNote'),
   sumChart: $('sumChart'),
-  sumMetrics: $('sumMetrics'), sumDist: $('sumDist'),
+  sumMetrics: $('sumMetrics'), sumDist: $('sumDist'), sumDistHint: $('sumDistHint'),
   btnAgain: $('btnAgain'), btnDismiss: $('btnDismiss'),
 };
 
@@ -665,7 +665,7 @@ function renderSummary(sum) {
     els.sumMetrics.appendChild(box);
   });
 
-  // 功率区间分布
+  // 相对目标功率的分布（不是功率区间 Z1–Z7，也不是按 FTP 分段）
   els.sumDist.innerHTML = '';
   const dist = sum.distribution || [];
   if (!dist.length) {
@@ -697,6 +697,22 @@ function renderSummary(sum) {
       row.append(label, track, value);
       els.sumDist.appendChild(row);
     });
+
+    // 把"这块是怎么算的"直接写在旁边。这里统计的是**相对目标**的百分比，
+    // 不是功率区间（Z1–Z7），而多段课表每段的目标并不一样；不写清楚就会
+    // 出现"目标 107W 却有 33% 落在 97–103%"这种看着自相矛盾的读数。
+    const targets = [...new Set((sum.intervals || [])
+      .map((r) => r.target_power).filter((v) => v != null)
+      .map((v) => Math.round(v)))].sort((a, b) => a - b);
+    const hint = els.sumDistHint;
+    if (hint) {
+      hint.textContent = targets.length > 1
+        ? '每个采样点按"当时的实际功率 ÷ 当时那一段的目标功率"归档，'
+          + '所以 97–103% 表示贴住了那一段的目标。这次用过 ' + targets.join(' / ')
+          + ' W 这几个目标，它们并不相同，不能拿头上那个平均目标来对照。'
+        : '每个采样点按"实际功率 ÷ 目标功率 ' + Math.round(sum.target_power || 0)
+          + ' W"归档：97–103% 就是贴住目标，低于 90% 是明显偏低。';
+    }
   }
 
   // 整段的功率曲线

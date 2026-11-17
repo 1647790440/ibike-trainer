@@ -415,6 +415,16 @@ async def test_target_power_is_weighted_not_last_step() -> None:
         check(abs(float(target) - expect) < 6.0,
               "是按每段实际时长加权的平均（期望约 {:.0f}W）".format(expect),
               "{}W".format(target))
+        # "实际比目标"必须用同一个（加权后的）目标算。以前它排在加权之前，
+        # 于是多段课表里这个差值是按最后一段（冷身 80W）算的 —— 真机出现过
+        # "实际比目标 +26.8W"这种明显对不上的读数。
+        dev = summary.get("target_deviation_w")
+        avg = summary.get("avg_power")
+        if check(dev is not None and avg is not None, "报告里有实际比目标",
+                 str(dev)):
+            check(abs(float(dev) - (float(avg) - float(target))) < 0.2,
+                  "实际比目标 = 平均功率 - 加权目标（不是减最后一段）",
+                  "{} vs {} - {}".format(dev, avg, target))
     finally:
         await session.aclose()
         await trainer.disconnect()

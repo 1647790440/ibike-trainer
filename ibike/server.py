@@ -1314,6 +1314,10 @@ class Server:
         if isinstance(summary, dict):
             summary["target_power"] = weighted_target_power(
                 summary.get("intervals") or [], summary.get("target_power"))
+            # "实际比目标"跟着一起改：老报告里它是按最后一段算的（会显示 +26.8W）
+            if summary.get("avg_power") is not None and summary.get("target_power") is not None:
+                summary["target_deviation_w"] = round(
+                    float(summary["avg_power"]) - float(summary["target_power"]), 1)
         return web.json_response({"ok": True, "report": report})
 
     async def handle_report_delete(self, request: web.Request) -> web.Response:

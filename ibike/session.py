@@ -1221,7 +1221,6 @@ class WorkoutSession:
             }
         mad = round(dev_sum / dev_t, 1) if dev_t > 0 else None
         in_zone_pct = round(100.0 * in_zone_t / valid_t, 1) if valid_t > 0 else None
-        dev_from_target = round(avg_power - target, 1) if avg_power is not None else None
 
         # 机械做功换算成消耗：按人体做功效率约 23% 折算。常说的"kJ 约等于 kcal"
         # 就是这个换算的近似结果，这里把假设写清楚。
@@ -1252,6 +1251,10 @@ class WorkoutSession:
 
         # 整次训练的"目标功率"：不能只报最后一段的值（见 weighted_target_power）
         target = weighted_target_power(intervals, self.target_power)
+        # "实际比目标"必须用同一个 target 算：以前它排在加权之前，于是多段课表里
+        # 这个差值是按最后一段（冷身 80W）算的 —— 真机出现过"实际比目标 +26.8W"。
+        dev_from_target = (round(avg_power - target, 1)
+                           if (avg_power is not None and target is not None) else None)
         # 间歇训练单独给出"高强度段达标率"。把恢复段混进去算整体达标率是没有意义的
         # ——恢复段的目标是降下来，而功率物理上降不了那么快——所以那个数字会很惨，
         # 却完全反映不出你高强度段踩得好不好。
