@@ -48,8 +48,7 @@
       <!-- 悬浮窗开关：像小飞机那样把功率/心率浮在屏幕角落 -->
       <button id="btnOverlay" class="btn btn-ghost" type="button">悬浮显示</button>
     </div>
-    <p id="scanHint" class="hint">骑行台通上电、踩两圈唤醒它；心率带戴上（电极沾点水）。
-      点一次扫描，骑行台和心率带会一起找出来，点一下就能连。</p>
+    <p id="scanHint" class="hint">骑行台通电、踩两圈唤醒；心率带戴上。</p>
     <p id="overlayHint" class="hint"></p>
 
     <!-- 有训练还没骑完（暂停中、或者骑行台掉线挂起了）时的提示。
@@ -88,7 +87,7 @@
       <div class="metric"><span class="m-label">速度</span><span id="devSpeed" class="m-value">--</span><span class="m-unit">km/h</span></div>
       <div class="metric"><span class="m-label">阻力档位</span><span id="devRes" class="m-value">--</span><span class="m-unit"></span></div>
     </div>
-    <p id="trainerHint" class="hint">还没连接。在上面扫描，然后点列表里的骑行台。</p>
+    <p id="trainerHint" class="hint">还没连接</p>
   </section>
 
   <!-- 块 3：心率带状态 + 实时数据 -->
@@ -107,8 +106,7 @@
       <div class="metric"><span class="m-label">区间</span><span id="devHrZone" class="m-value">--</span><span class="m-unit"></span></div>
       <div class="metric"><span class="m-label">电极</span><span id="devHrContact" class="m-value">--</span><span class="m-unit"></span></div>
     </div>
-    <p id="hrHint" class="hint">还没连接。心率带是可选的——只连骑行台也能正常训练。
-      在上面「扫描与连接」里点它就连上了；连过一次之后，下次启动会自动重连。</p>
+    <p id="hrHint" class="hint">还没连接（可选）</p>
   </section>
   </section><!-- /devicesView -->
 
@@ -127,12 +125,12 @@
       <div class="hr-set-row">
         <label for="hrMaxInput">最大心率</label>
         <input id="hrMaxInput" type="number" min="100" max="230" step="1" value="180">
-        <span class="hr-note">bpm · 心率区间按它划分</span>
+        <span class="hr-note">bpm</span>
       </div>
       <div class="hr-set-row">
         <label for="hrRestInput">静息心率</label>
         <input id="hrRestInput" type="number" min="30" max="120" step="1" value="60">
-        <span class="hr-note">bpm · 只在用「储备心率」算法时需要</span>
+        <span class="hr-note">bpm</span>
       </div>
       <div class="hr-set-row">
         <label for="hrZoneMode">区间算法</label>
@@ -147,13 +145,10 @@
           <span>上限保护</span>
         </label>
         <input id="hrLimitInput" type="number" min="100" max="220" step="1" value="165">
-        <span class="hr-note">bpm · 超过并持续 10 秒就自动下调功率（最多降到本段的 80%）</span>
+        <span class="hr-note">bpm</span>
       </div>
     </div>
-    <p class="hint">
-      上限保护是<strong>刹车</strong>，不是控制方式：心率本身滞后几十秒，所以程序不会
-      拿它做闭环控制，而是分几步往下让、心率回落后再回到原计划。自由骑行时不改功率，只提示。
-    </p>
+
 
     <div class="card-head mt">
       <h2>设定训练目标</h2>
@@ -173,11 +168,7 @@
         <input id="ftpInput" type="number" min="50" max="600" step="1" value="200">
         <span class="unit">W</span>
       </div>
-      <p class="hint" id="ftpHint">
-        强度都按这个值的百分比计算——乳酸阈值因人而异，只有表达成阈值百分比才算科学。
-        不确定的话：FTP ≈ 你能全力骑 20 分钟的平均功率 × 0.95，或者先用 200W 试一次，
-        体感太轻/太重再改。
-      </p>
+
     </div>
 
     <!-- ---------- 恒定功率 ---------- -->
@@ -313,7 +304,7 @@
         <option value="ftms">原生 ERG（骑行台内部闭环）</option>
         <option value="resistance">闭环阻力（上位机调节阻力）</option>
       </select>
-      <p class="hint" id="modeHint">自动模式会优先用原生 ERG；如果骑行台不理会目标功率，会自动改用闭环阻力控制。</p>
+      <p class="hint" id="modeHint" hidden></p>
     </div>
 
     <button id="btnStart" class="btn btn-start" disabled>开始训练</button>
@@ -467,7 +458,6 @@
     <div class="sum-dist">
       <h3>相对目标功率的分布</h3>
       <div id="sumDist" class="dist-rows"></div>
-      <p class="hint" id="sumDistHint"></p>
     </div>
 
     <div id="sumTestSection" class="sum-dist hidden">
@@ -500,32 +490,19 @@
       <h3>休息段</h3>
       <div id="sumRestStats" class="metrics metrics--3"></div>
       <div id="sumRests" class="iv-table"></div>
-      <p class="hint" id="sumRestHint">
-        暂停/挂起期间的心率是**单独**记的，不并入上面的训练统计（休息时的心率不是
-        训练负荷）。「60 秒回落」= 停下来那一刻的心率减去停满 60 秒时的心率：
-        同样的强度下掉得越快，说明有氧恢复能力越好——和自己比才有意义。
-      </p>
+
     </div>
 
     <div id="sumModeSection" class="sum-dist hidden">
       <h3>控功率方式切换</h3>
       <div id="sumModeChanges" class="iv-table"></div>
-      <p class="hint">
-        训练中途切换过控功率方式。切换时闭环控制器会从骑行台当前档位接手，
-        不再像以前那样从量程的四分之一起步（那会让阻力先掉一大截再慢慢爬回来）。
-        如果这里出现「目标功率探测」，说明程序怀疑固件没在跟目标功率，先故意把目标
-        压低一档验证了 20 秒——那段时间的功率凹坑是探测本身造成的，不是故障。
-      </p>
+
     </div>
 
     <div id="sumIntervalSection" class="sum-dist hidden">
       <h3>分段明细</h3>
       <div id="sumIntervals" class="iv-table"></div>
-      <p class="hint">
-        「达标」只对高强度段有意义：恢复段的目标是降下来，而飞轮有惯性，几秒的
-        恢复期内功率物理上降不到目标值，所以那一列留空。每段开头的一小段过渡期
-        也不计入统计。
-      </p>
+
     </div>
 
     <div class="sum-actions">
@@ -541,7 +518,7 @@
       <h2>训练报告</h2>
       <button id="btnClearReports" class="btn btn-mini hidden">清空全部</button>
     </div>
-    <p id="reportsEmpty" class="hint">还没有训练记录。每次训练结束会自动保存一份报告。</p>
+    <p id="reportsEmpty" class="hint">还没有训练记录</p>
     <ul id="reportsList" class="report-list"></ul>
   </section>
 

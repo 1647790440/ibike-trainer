@@ -252,7 +252,7 @@ function onServerEvent(e) {
   if (!e) return;
   logLine(e.kind, e.message);
   if (e.kind === 'disconnected') {
-    showBanner(e.message + '。骑行台可能休眠了、被手机抢走了连接，或者超出了蓝牙范围。', 'warn');
+    showBanner(e.message, 'warn');
   } else if (e.kind === 'error') {
     showBanner(e.message, 'error');
   }
@@ -316,15 +316,11 @@ function render(s) {
     els.rideNotice.classList.toggle('hidden', !running);
     if (running) {
       els.rideNotice.textContent = (trainerLost && s.auto_reconnecting)
-        ? '骑行台掉线了，训练已挂起（已骑 ' + fmtClock(s.elapsed_s)
-          + '）。程序正在后台自动重连，接上之后骑起来就会自动继续，这里什么都不用点。'
+        ? '训练已挂起 · 正在自动重连 · 已骑 ' + fmtClock(s.elapsed_s)
         : (trainerLost
-           ? '⚠ 有一场训练正在进行，但骑行台掉线了，训练已挂起（已骑 '
-             + fmtClock(s.elapsed_s) + '）。在下面重新连上骑行台，它会接回这场训练，'
-             + '然后回「2 训练」点「继续」接着骑。'
-           : '有一场训练正在进行（' + (s.state === 'paused' ? '已暂停' : '进行中')
-             + '，已骑 ' + fmtClock(s.elapsed_s) + '）。在这里连接骑行台会接回这场训练；'
-             + '点「断开」则会结束并保存它。');
+           ? '训练已挂起 · 重新连上骑行台 · 已骑 ' + fmtClock(s.elapsed_s)
+           : '这场训练还在（' + (s.state === 'paused' ? '已暂停' : '进行中')
+             + '，已骑 ' + fmtClock(s.elapsed_s) + '）· 连接骑行台就接回来');
     }
   }
 
@@ -352,12 +348,10 @@ function render(s) {
 
   // 按钮为什么点不了，直接写在按钮下面，别让人猜
   if (!connected) {
-    els.startHint.textContent =
-      '按钮是灰的：还没连上骑行台。请在上面点「扫描蓝牙设备」，再选中你的骑行台。';
+    els.startHint.textContent = '还没连接骑行台';
   } else if (!running && trainer.capabilities
              && trainer.capabilities.has_control_point === false) {
-    els.startHint.textContent =
-      '⚠ 这台设备没有 FTMS 控制点（0x2AD9），只能读取数据，无法控制阻力。';
+    els.startHint.textContent = '这台设备只能读数据，不能控阻力（缺 FTMS 控制点）';
   } else {
     els.startHint.textContent = '';
   }
@@ -637,7 +631,7 @@ function renderSummary(sum) {
   }
   const verdict = qualityVerdict(qualityPct, sum.erg_mode_label);
   if (verdict) notes.push(verdict);
-  els.sumQualityNote.textContent = notes.join('；');
+  els.sumQualityNote.textContent = '';
 
   // 其余指标
   const metrics = [
@@ -698,21 +692,6 @@ function renderSummary(sum) {
       els.sumDist.appendChild(row);
     });
 
-    // 把"这块是怎么算的"直接写在旁边。这里统计的是**相对目标**的百分比，
-    // 不是功率区间（Z1–Z7），而多段课表每段的目标并不一样；不写清楚就会
-    // 出现"目标 107W 却有 33% 落在 97–103%"这种看着自相矛盾的读数。
-    const targets = [...new Set((sum.intervals || [])
-      .map((r) => r.target_power).filter((v) => v != null)
-      .map((v) => Math.round(v)))].sort((a, b) => a - b);
-    const hint = els.sumDistHint;
-    if (hint) {
-      hint.textContent = targets.length > 1
-        ? '每个采样点按"当时的实际功率 ÷ 当时那一段的目标功率"归档，'
-          + '所以 97–103% 表示贴住了那一段的目标。这次用过 ' + targets.join(' / ')
-          + ' W 这几个目标，它们并不相同，不能拿头上那个平均目标来对照。'
-        : '每个采样点按"实际功率 ÷ 目标功率 ' + Math.round(sum.target_power || 0)
-          + ' W"归档：97–103% 就是贴住目标，低于 90% 是明显偏低。';
-    }
   }
 
   // 整段的功率曲线
@@ -787,17 +766,11 @@ function renderSummary(sum) {
       els.sumHrZones.appendChild(row);
     });
 
-    const bits = [];
-    bits.push(hrStats.zone_mode === 'reserve'
-      ? '区间按储备心率（Karvonen）算，最大心率 '
-        + Math.round(hrStats.max_hr || 0) + '、静息 ' + Math.round(hrStats.rest_hr || 0)
-      : '区间按最大心率百分比算，最大心率 ' + Math.round(hrStats.max_hr || 0));
-    if (hrStats.cap_active) {
-      bits.push('心率上限保护已启用（' + Math.round(hrStats.cap_bpm || 0) + ' bpm）'
-        + (hrStats.cap_note ? '：' + hrStats.cap_note : ''));
-    }
-    if (hrStats.rr_seen) bits.push('这根带子会发 RR 间期（以后可以做静息 HRV）');
-    els.sumHrHint.textContent = bits.join('；');
+    // 只留"上限保护真的动过手"这种事实；区间算法、RR 之类属于说明文字，不再展示
+    els.sumHrHint.textContent = hrStats.cap_active
+      ? '上限保护已启用（' + Math.round(hrStats.cap_bpm || 0) + ' bpm）'
+        + (hrStats.cap_note ? '：' + hrStats.cap_note : '')
+      : '';
   }
 
   // 休息段（暂停/挂起期间的心率）。它是**独立**的一块：既不进平均心率，
@@ -986,7 +959,7 @@ function selectTemplate(id) {
   paramValues = {};
   (t && t.params ? t.params : []).forEach((p) => { paramValues[p.key] = p.default; });
   renderTemplateCards();
-  els.templateDesc.textContent = (t && t.desc) || '';
+  els.templateDesc.textContent = '';
   renderParamEditor();
   refreshPlan();
 }
@@ -1136,7 +1109,7 @@ function selectTest(id) {
   testParamValues = {};
   (t && t.params ? t.params : []).forEach((p) => { testParamValues[p.key] = p.default; });
   renderTestCards();
-  els.testDesc.textContent = (t && t.desc) || '';
+  els.testDesc.textContent = '';
   renderTestParamEditor();
   refreshTestPlan();
 }
@@ -1441,16 +1414,15 @@ async function newCourse() {
 }
 
 function updatePmodeHint() {
+  // 功率方式的说明文字去掉了：界面上只留选项本身
   if (!editingCourse) return;
-  els.pmodeHint.textContent = editingCourse.power_mode === 'abs'
-    ? '每个小节的瓦数固定不变，换 FTP 也不会影响这门课。适合"我就想稳稳踩 150W"。'
-    : '每个小节的强度按 FTP 的百分比算，改 FTP 整门课跟着缩放。适合"我想练阈值"。';
+  els.pmodeHint.textContent = '';
 }
 
 function updateSaveHint() {
   if (!editingCourse) return;
   if (customDirty) {
-    els.saveHint.textContent = '有未保存的改动。点「开始训练」会自动先保存。';
+    els.saveHint.textContent = '有未保存的改动';
   } else if (editingCourse.id) {
     els.saveHint.textContent = '已保存。';
   } else {
@@ -2125,7 +2097,7 @@ els.btnScan.addEventListener('click', async () => {
     }
   } catch (err) {
     toast('扫描失败：' + err.message);
-    els.scanHint.textContent = '扫描失败。若是第一次运行，请在「系统设置 → 隐私与安全性 → 蓝牙」里允许终端访问蓝牙。';
+    els.scanHint.textContent = '扫描失败：请在系统设置里允许终端访问蓝牙';
   } finally {
     els.btnScan.disabled = false;
   }
@@ -2255,11 +2227,7 @@ function renderOverlayBtn(running) {
   els.btnOverlay.textContent = running ? '关闭悬浮显示' : '悬浮显示';
   els.btnOverlay.className = 'btn ' + (running ? 'btn-danger' : 'btn-ghost');
   if (els.overlayHint) {
-    els.overlayHint.textContent = running
-      ? '悬浮窗已开启：功率 / 剩余时间 / 心率踏频会浮在屏幕右上角（置顶、点击穿透，'
-        + '不挡你看视频）。关了它不影响训练。'
-      : '想让训练数据浮在屏幕角落（像小飞机那样，看视频不用切窗口），点上面的'
-        + '「悬浮显示」。';
+    els.overlayHint.textContent = running ? '已开启' : '';
   }
 }
 
@@ -2295,12 +2263,12 @@ async function doConnect(payload) {
       // 骑行台掉线后重连：服务端把这场训练接回来了，不是开了一场新的
       els.scanHint.textContent = '已重新连接，这场训练还在（已骑 '
         + fmtClock(st.elapsed_s) + '）。回「2 训练」点「继续」接着骑。';
-      showBanner('骑行台已重新连接，这场训练还在——回「2 训练」点「继续」接着骑。', 'info');
+      showBanner('骑行台已重新连接', 'info');
       switchView('training');
       logLine('connected', '骑行台已重连，接回进行中的训练');
     } else {
       els.scanHint.textContent = '已连接。设定目标功率和时长，然后开始。';
-      showBanner('已连接骑行台，可以设定目标并开始训练了。', 'info');
+      showBanner('骑行台已连接', 'info');
       logLine('connected', '已连接 ' + ((res.trainer || {}).name || payload.address || '模拟设备'));
     }
   } catch (err) {
@@ -2444,16 +2412,16 @@ function applySetupMode(mode) {
     // 启动时那一次 /api/templates 万一失败，这里要能重试，否则间歇标签页
     // 永远是空的，"开始训练"只会回一句"未知的训练方案"，只能刷新页面
     if (!templates.length) loadTemplates();
-    els.ftpHint.textContent =
+    if (els.ftpHint) els.ftpHint.textContent =
       '强度都按这个值的百分比计算——乳酸阈值因人而异，只有表达成阈值百分比才算科学。'
       + '不确定的话：FTP ≈ 你能全力骑 20 分钟的平均功率 × 0.95，或者先用 200W 试一次。';
   } else if (mode === 'custom') {
-    els.ftpHint.textContent =
+    if (els.ftpHint) els.ftpHint.textContent =
       '课程里的小节按 %FTP 表示时会用这个值折算成瓦数；'
       + '按绝对瓦数表示的小节不受它影响。';
     loadCustomCourses();
   } else if (mode === 'test') {
-    els.ftpHint.textContent =
+    if (els.ftpHint) els.ftpHint.textContent =
       '这个值影响测试课表里"轻松骑"这类陪衬段的强度，以及方案预览。'
       + '测试的结论不依赖它——测出来的 FTP 会覆盖它。';
     loadFtpTests();
@@ -2490,21 +2458,15 @@ function renderTrainerBlock(s) {
     ? '--' : (s.resistance_raw / 10).toFixed(1));
 
   if (!connected) {
-    els.trainerHint.textContent = s && s.trainer_lost && s.auto_reconnecting
-      ? '骑行台掉线了（训练已挂起，没丢）。程序正在后台自动重连，接上就会接回这场训练——'
-        + '骑起来就行，也可以在这里手动连。'
-      : (s && s.trainer_lost
-         ? '骑行台掉线了（训练已挂起，没丢）。在上面重新扫描并连接，会把这场训练接回来。'
-         : '还没连接。在上面扫描，然后点列表里的骑行台。');
+    els.trainerHint.textContent = s && s.trainer_lost
+      ? (s.auto_reconnecting ? '掉线中，正在自动重连' : '掉线中，训练已挂起')
+      : '还没连接';
   } else if (s.stale_data) {
-    els.trainerHint.textContent = '已连接，但有一阵子没收到数据了——检查它是不是休眠了、'
-      + '或者被手机抢走了连接。';
+    els.trainerHint.textContent = '已连接，但没收到数据';
   } else if (s.power == null) {
-    els.trainerHint.textContent = '已连接。踩两圈就会开始出数据。';
+    els.trainerHint.textContent = '已连接，踩两圈就出数据';
   } else {
-    els.trainerHint.textContent = connected && sim
-      ? '模拟设备，数据是程序生成的，用来先跑通流程。'
-      : '数据正常。可以切到「2 训练」设定目标了。';
+    els.trainerHint.textContent = connected && sim ? '模拟设备' : '数据正常';
   }
 }
 
@@ -2533,22 +2495,17 @@ function renderHr(stateObj) {
     && bpm >= stateObj.hr_limit.bpm ? ' m-hr-over' : '');
 
   if (!connected) {
-    els.hrHint.textContent = '还没连接。心率带是可选的——只连骑行台也能正常训练。'
-      + '在上面的「扫描与连接」里点它就能连上。';
+    els.hrHint.textContent = '还没连接（可选）';
     return;
   }
-  // 带子有没有 RR 间期，第一次连上就能看出来（决定以后能不能做 HRV）
-  const rr = hr.rr_seen ? '支持 RR 间期' : '不带 RR 间期（做不了静息 HRV）';
   if (hr.stale || bpm == null) {
-    els.hrHint.textContent = '已连接，但还没收到心率数据——检查带子有没有戴好、'
-      + '电极有没有沾水（干的电极读数会不稳）。' + rr + '。';
+    els.hrHint.textContent = '已连接，但没收到心率数据（检查带子和电极）';
   } else if (stateObj.hr_source === 'trainer') {
     // 没配心率带时才会用骑行台自带的心率字段。它是固件估的，实测会卡在一个
     // 看着合理的数字上（和手表对不上），所以必须明说来源，别让人以为程序坏了。
-    els.hrHint.textContent = '心率来自骑行台自带的传感器（没配心率带时才会用它），'
-      + '数值可能不准——和手表差得多就戴上心率带。';
+    els.hrHint.textContent = '来源是骑行台自带传感器（可能不准）';
   } else {
-    els.hrHint.textContent = '数据正常，' + rr + '。';
+    els.hrHint.textContent = '心率正常';
   }
 }
 
@@ -2557,7 +2514,7 @@ async function connectHr(address) {
   try {
     await api('/api/hr/connect', address ? { address: address } : {});
     els.hrList.innerHTML = '';
-    els.hrHint.textContent = '已连接。';
+    els.hrHint.textContent = '已连接';
   } catch (err) {
     els.hrHint.textContent = '连接失败：' + err.message;
   }
@@ -2566,7 +2523,7 @@ async function connectHr(address) {
 els.btnHrDisconnect.addEventListener('click', async () => {
   try {
     await api('/api/hr/disconnect', {});
-    els.hrHint.textContent = '已断开。连过一次之后，下次启动会自动重连。';
+    els.hrHint.textContent = '已断开';
   } catch (err) { toast(err.message); }
 });
 
@@ -2676,7 +2633,7 @@ els.btnUseFtp.addEventListener('click', async () => {
   els.ftpInput.value = tr.ftp;
   try {
     await api('/api/settings', { ftp: tr.ftp });
-    showBanner('FTP 已更新为 ' + tr.ftp + 'W，后面的间歇课表和自定义课程都会按它折算。', 'info');
+    showBanner('FTP 已更新为 ' + tr.ftp + 'W', 'info');
     logLine('info', 'FTP 已更新为 ' + tr.ftp + 'W');
     schedulePlanRefresh();
     scheduleCustomPlan();

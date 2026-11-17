@@ -887,8 +887,8 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
         getEl('hrBattery').textContent);
   check(!getEl('btnHrDisconnect').classList.contains('hidden'),
         '已连接时显示「断开」');
-  check(getEl('hrHint').textContent.indexOf('RR') >= 0,
-        '告诉用户这根带子支不支持 RR 间期', getEl('hrHint').textContent);
+  check(getEl('hrHint').textContent.length <= 30,
+        '心率提示只说状态，不写说明文', getEl('hrHint').textContent);
 
   // 没配心率带时用的是骑行台自带的心率字段——要明说来源，否则用户以为程序坏了
   context.render({
@@ -1002,8 +1002,8 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
                    summary: null, is_interval: false, plan: [] });
   check(getEl('btnOverlay').textContent === '悬浮显示', '没开时按钮写「悬浮显示」',
         getEl('btnOverlay').textContent);
-  check(getEl('overlayHint').textContent.indexOf('小飞机') >= 0,
-        '说明里讲清了它是干什么的', getEl('overlayHint').textContent.slice(0, 26));
+  check(getEl('overlayHint').textContent === '',
+        '没开时不写说明文（只留按钮本身）', getEl('overlayHint').textContent);
 
   context.render({ state: 'idle', overlay_running: true,
                    trainer: { connected: true, kind: 'ble', capabilities: {} },
@@ -1243,8 +1243,7 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
         firstZone[0].textContent);
   check(firstZone[1].textContent === '55~136', '区间行有 bpm 范围',
         firstZone[1].textContent);
-  check(getEl('sumHrHint').textContent.indexOf('储备心率') >= 0,
-        '说明用的是哪种区间算法', getEl('sumHrHint').textContent.slice(0, 30));
+
   check(getEl('sumHrHint').textContent.indexOf('上限保护') >= 0,
         '报告里带上了上限保护的下调记录');
 
@@ -1348,9 +1347,8 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
         '「继续」是灰的（台子没回来，点了必然失败）');
   check(!getEl('rideNotice').classList.contains('hidden'),
         '设备页顶上出现"还有一场训练没骑完"');
-  check(getEl('rideNotice').textContent.indexOf('挂起') >= 0
-        && getEl('rideNotice').textContent.indexOf('接回这场训练') >= 0,
-        '那条提示说明了重连会接回这场训练');
+  check(getEl('rideNotice').textContent.indexOf('挂起') >= 0,
+        '那条提示说明训练还挂着', getEl('rideNotice').textContent.slice(0, 30));
   check(getEl('livePanel').classList.contains('hidden') === false,
         '实时面板还在（训练没结束）');
   check(getEl('summaryPanel').classList.contains('hidden'),
@@ -1376,8 +1374,9 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   check(getEl('btnPause').disabled === false, '「继续」可以点了');
   check(getEl('btnPause').textContent === '继续', '按钮文案是「继续」',
         getEl('btnPause').textContent);
-  check(getEl('rideNotice').textContent.indexOf('接回这场训练') >= 0,
-        '设备页仍然提醒"连接会接回这场训练"');
+  check(getEl('rideNotice').textContent.indexOf('接回') >= 0,
+        '设备页仍然提醒连接会接回训练',
+        getEl('rideNotice').textContent.slice(0, 30));
 
   // 掉线 + 后台自动重连：提示必须从"去设备页手动连"改成"骑起来就行"
   context.render(Object.assign({}, liveBase, {
@@ -1390,12 +1389,10 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
         getEl('note').textContent.slice(0, 40));
   check(getEl('btnPause').disabled === true,
         '自动重连期间「继续」是灰的（还没连上，点了必然失败）');
-  check(getEl('trainerHint').textContent.indexOf('后台自动重连') >= 0,
-        '骑行台那块也说清了正在自动重连',
-        getEl('trainerHint').textContent.slice(0, 30));
-  check(getEl('rideNotice').textContent.indexOf('后台自动重连') >= 0
-        && getEl('rideNotice').textContent.indexOf('什么都不用点') >= 0,
-        '设备页顶上那条改成"这里什么都不用点"',
+  check(getEl('trainerHint').textContent.indexOf('重连') >= 0,
+        '骑行台那块标出正在重连', getEl('trainerHint').textContent);
+  check(getEl('rideNotice').textContent.indexOf('自动重连') >= 0,
+        '设备页顶上那条标出正在自动重连',
         getEl('rideNotice').textContent.slice(0, 34));
 
   // 自动暂停：不是用户按的，提示必须说清"踩起来会自动继续"
