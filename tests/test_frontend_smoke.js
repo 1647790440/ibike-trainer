@@ -1276,8 +1276,34 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
         && restRow[2].textContent.indexOf('112') >= 0
         && restRow[2].textContent.indexOf('60 秒回落 21') >= 0,
         '行里有心率变化和 60 秒回落', restRow[2].textContent);
-  check(getEl('sumRestStats').children[1].lastChild.textContent === '05:00',
-        '统计给了合计时长', getEl('sumRestStats').children[1].lastChild.textContent);
+  // 休息段统计改成和训练总结同一套瓦片（.metric：标签 / 数值 / 单位）
+  const restTiles = getEl('sumRestStats').children;
+  check(restTiles.length === 3, '休息段统计是三块瓦片', String(restTiles.length) + ' 块');
+  check(restTiles[0].className === 'metric', '用的是读数瓦片而不是纯文本',
+        restTiles[0].className);
+  check(restTiles[1].children[1].textContent === '05:00',
+        '瓦片里是合计时长', restTiles[1].children[1].textContent);
+
+  // 分段明细：有分段时必须真的画出来（去掉 # 列之后这里曾经残留 idx 引用，
+  // 导致一打开报告就抛 "idx is not defined"，而当时的 fixture 没有分段，漏掉了）
+  console.log('\n[10d] 分段明细');
+  context.render({
+    state: 'finished', trainer: { connected: true, kind: 'ble', capabilities: {} },
+    is_interval: false, is_test: false, plan: [],
+    summary: Object.assign({}, baseSum, {
+      finished_at: 1700009997, is_interval: true,
+      intervals: [
+        { name: '热身', kind: 'warmup', target_power: 80, avg_power: 79, in_zone_pct: null },
+        { name: '高强度', kind: 'work', target_power: 110, avg_power: 110, in_zone_pct: 58 },
+      ],
+    }),
+  });
+  const ivChildren = getEl('sumIntervals').children;
+  check(ivChildren.length >= 3, '表头 + 两行分段都画出来了', String(ivChildren.length) + ' 行');
+  check(ivChildren[0].children.length === 4, '表头是四列（# 列已去掉）',
+        String(ivChildren[0].children.length) + ' 列');
+  check(ivChildren[1].children[0].textContent === '热身', '第一行是分段名，不再是序号',
+        ivChildren[1].children[0].textContent);
 
   // 没有休息段的报告：整块不显示
   context.render({

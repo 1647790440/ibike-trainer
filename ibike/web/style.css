@@ -249,6 +249,7 @@ canvas#chart {
 .metrics {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
 }
+.metrics--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .metric {
   background: var(--card-2); border: 1px solid var(--line);
   border-radius: 11px; padding: 10px 8px;
@@ -568,7 +569,7 @@ canvas#ivChart {
   max-height: 320px; overflow-y: auto;
 }
 .iv-row {
-  display: grid; grid-template-columns: 22px 1fr 62px 58px 58px;
+  display: grid; grid-template-columns: 1fr 62px 58px 58px;
   align-items: center; gap: 8px; font-size: 12px;
   padding: 6px 8px; border-radius: 7px; background: var(--card-2);
 }
@@ -582,15 +583,16 @@ canvas#ivChart {
 .iv-row .r-good { color: var(--accent); }
 .iv-row .r-bad { color: var(--warn); }
 .iv-head-row {
-  display: grid; grid-template-columns: 22px 1fr 62px 58px 58px;
+  display: grid; grid-template-columns: 1fr 62px 58px 58px;
   gap: 8px; font-size: 10px; color: #4a5a6e; padding: 0 8px 2px;
 }
-.iv-head-row span:nth-child(n+3) { text-align: right; }
+.iv-head-row span:nth-child(n+2) { text-align: right; }
 
 @media (max-width: 560px) {
   .template-list { grid-template-columns: 1fr; }
   .param-grid { grid-template-columns: repeat(2, 1fr); }
-  .iv-row, .iv-head-row { grid-template-columns: 18px 1fr 52px 48px 48px; font-size: 11px; }
+  .iv-row, .iv-head-row { grid-template-columns: 1fr 52px 48px 48px; font-size: 11px; }
+  .metrics--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 /* ---------------- 自定义课程 ---------------- */

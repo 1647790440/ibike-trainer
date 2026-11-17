@@ -744,6 +744,7 @@ function renderSummary(sum) {
   els.sumHrSection.classList.toggle('hidden', !hrStats);
   if (hrStats) {
     els.sumHrStats.innerHTML = '';
+    // 和训练总结里其余读数共用同一套瓦片（.metric），别再是一行纯文本
     const cells = [
       ['平均心率', hrStats.avg_bpm == null ? '--' : Math.round(hrStats.avg_bpm), 'bpm'],
       ['最大心率', hrStats.max_bpm == null ? '--' : Math.round(hrStats.max_bpm), 'bpm'],
@@ -751,10 +752,10 @@ function renderSummary(sum) {
     ];
     cells.forEach(([label, value, unit]) => {
       const box = document.createElement('div');
-      box.className = 'sum-cell';
-      const lb = document.createElement('span'); lb.className = 'sc-label';
+      box.className = 'metric';
+      const lb = document.createElement('span'); lb.className = 'm-label';
       lb.textContent = label;
-      const val = document.createElement('span'); val.className = 'sc-value';
+      const val = document.createElement('span'); val.className = 'm-value';
       val.textContent = value;
       box.append(lb, val);
       if (unit) {
@@ -808,15 +809,19 @@ function renderSummary(sum) {
     const total = sum.rest_s != null
       ? sum.rest_s : rests.reduce((a, r) => a + (r.duration_s || 0), 0);
     els.sumRestStats.innerHTML = '';
-    [['次数', String(rests.length) + ' 次'],
-     ['合计', fmtClock(total)],
-     ['最长', fmtClock(Math.max.apply(null, rests.map((r) => r.duration_s || 0)))]
-    ].forEach(([label, value]) => {
+    [['次数', String(rests.length), '次'],
+     ['合计', fmtClock(total), ''],
+     ['最长', fmtClock(Math.max.apply(null, rests.map((r) => r.duration_s || 0))), ''],
+    ].forEach(([label, value, unit]) => {
       const cell = document.createElement('div');
-      cell.className = 'sum-cell';
-      cell.innerHTML = '<span class="s-label"></span><span class="s-value"></span>';
-      cell.firstChild.textContent = label;
-      cell.lastChild.textContent = value;
+      cell.className = 'metric';
+      const lb = document.createElement('span'); lb.className = 'm-label';
+      lb.textContent = label;
+      const val = document.createElement('span'); val.className = 'm-value';
+      val.textContent = value;
+      const un = document.createElement('span'); un.className = 'm-unit';
+      un.textContent = unit || '';
+      cell.append(lb, val, un);
       els.sumRestStats.appendChild(cell);
     });
     rests.forEach((r) => {
@@ -886,19 +891,16 @@ function renderSummary(sum) {
   if (rows.length) {
     const head = document.createElement('div');
     head.className = 'iv-head-row';
-    ['#', '分段', '目标', '实际', '达标'].forEach((text) => {
+    ['分段', '目标', '实际', '达标'].forEach((text) => {
       const span = document.createElement('span');
       span.textContent = text;
       head.appendChild(span);
     });
     els.sumIntervals.appendChild(head);
 
-    rows.forEach((row, i) => {
+    rows.forEach((row) => {
       const el = document.createElement('div');
       el.className = 'iv-row ' + (row.kind || '');
-
-      const idx = document.createElement('span');
-      idx.className = 'r-idx'; idx.textContent = i + 1;
 
       const name = document.createElement('span');
       name.className = 'r-name';
@@ -918,7 +920,7 @@ function renderSummary(sum) {
       pct.className = 'r-num ' + (row.in_zone_pct == null ? '' : (good ? 'r-good' : 'r-bad'));
       pct.textContent = row.in_zone_pct == null ? '--' : row.in_zone_pct.toFixed(0) + '%';
 
-      el.append(idx, name, target, avg, pct);
+      el.append(name, target, avg, pct);
       els.sumIntervals.appendChild(el);
     });
   }
