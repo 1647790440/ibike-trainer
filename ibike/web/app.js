@@ -1848,11 +1848,10 @@ function drawPowerChart(canvas, points, opts = {}) {
   ctx.lineJoin = 'round';
   ctx.stroke();
 
-  // 目标功率阶梯虚线：加粗并用红色，和实际功率（墨色）拉开
+  // 目标功率阶梯虚线：红色加粗，底下再垫一条纸色"衬边"，
+  // 这样即使实际功率线贴着目标走，红线也能从黑色曲线里"抠"出来。
   ctx.save();
-  ctx.setLineDash([7, 5]);
-  ctx.strokeStyle = TARGET_RED;
-  ctx.lineWidth = 2;
+  ctx.setLineDash([10, 6]);
   ctx.beginPath();
   let started = false;
   usable.forEach((d) => {
@@ -1861,7 +1860,15 @@ function drawPowerChart(canvas, points, opts = {}) {
     if (!started) { ctx.moveTo(X(d.t), y); started = true; }
     else { ctx.lineTo(X(d.t), y); }
   });
-  if (started) ctx.stroke();
+  if (started) {
+    // 先画一条更宽的纸色线做衬边，再把红线压在它上面
+    ctx.strokeStyle = PAPER;
+    ctx.lineWidth = 7;
+    ctx.stroke();
+    ctx.strokeStyle = TARGET_RED;
+    ctx.lineWidth = 3.5;
+    ctx.stroke();
+  }
   ctx.restore();
 
   // 心率曲线：右侧独立刻度。和功率画在一起是因为"同样的功率、心率一路往上爬"
