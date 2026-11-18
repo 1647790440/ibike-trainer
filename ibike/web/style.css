@@ -268,6 +268,14 @@ input[type="range"] { accent-color: var(--color-deep-teal); width: 100%; }
 .check { display: flex; align-items: center; gap: var(--spacing-8); font-size: var(--text-body); color: var(--color-ink); }
 .check input { width: 16px; height: 16px; accent-color: var(--color-deep-teal); }
 .hr-note { font-size: var(--text-body-sm); color: var(--color-graphite); }
+/* 骑手档案：四项并排 */
+.rider-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--spacing-12) var(--spacing-16); }
+.rider-field { display: flex; flex-direction: column; gap: var(--spacing-4); min-width: 0; }
+.rider-field > label { font-size: var(--text-body-sm); color: var(--color-graphite); }
+.rider-field > label.check { display: flex; align-items: center; gap: var(--spacing-4); font-size: var(--text-body-sm); }
+.rider-input { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.rider-input input { width: 100%; min-width: 0; }
+/* 老的三列行（会话内的临时表单还在用） */
 .hr-set-row { display: grid; grid-template-columns: 96px minmax(150px, 200px) 1fr; align-items: center; gap: var(--spacing-8); font-size: var(--text-body); }
 .hr-settings { display: flex; flex-direction: column; gap: var(--spacing-8); }
 
@@ -643,6 +651,7 @@ canvas#ivChart         { height: 64px; }
   .template-list, .param-grid { grid-template-columns: minmax(0, 1fr); }
   .power-now { font-size: 48px; }
   .hr-set-row { grid-template-columns: 80px 96px 1fr; }
+  .rider-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .rv-head { display: none; }
   .rv-row { grid-template-columns: 56px 1fr; row-gap: 2px; }
   .rv-why, .rv-hr { grid-column: 2 / -1; }

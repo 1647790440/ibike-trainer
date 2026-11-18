@@ -1183,8 +1183,7 @@ class WorkoutSession:
         hr_stats = None
         if hr_samples:
             band = self._hr_settings()
-            zones = hr_zones(band.get("max_hr"), band.get("rest_hr"),
-                             band.get("zone_mode") or "max")
+            zones = hr_zones(band.get("max_hr"))
             counts = [0.0] * len(zones) if zones else []
             for s in trace:
                 bpm = s.get("hr")
@@ -1212,7 +1211,6 @@ class WorkoutSession:
                             "seconds": round(c, 1),
                             "pct": (round(100.0 * c / total, 1) if total > 0 else 0.0)}
                            for z, c in zip(zones, counts)] if zones else []),
-                "zone_mode": (band.get("zone_mode") or "max") if zones else None,
                 "max_hr": band.get("max_hr"),
                 "rest_hr": band.get("rest_hr"),
                 "cap_active": bool(band.get("hr_limit_enabled")),
@@ -1910,8 +1908,7 @@ class WorkoutSession:
         cfg = self._hr_settings()
         if bpm is None or not cfg.get("max_hr"):
             return None
-        return hr_zone_of(bpm, cfg.get("max_hr"), cfg.get("rest_hr"),
-                          cfg.get("zone_mode") or "max")
+        return hr_zone_of(bpm, cfg.get("max_hr"))
 
     def _check_hr_cap(self, now: float) -> None:
         """心率上限保护：超上限就往下压一点功率。
@@ -2639,9 +2636,7 @@ class WorkoutSession:
                              and getattr(self.heart_rate, "connected", False)
                              and self.current_hr is None),
             "hr_zone": self._hr_zone(self.current_hr),
-            "hr_zones": hr_zones((self._hr_settings() or {}).get("max_hr"),
-                                 (self._hr_settings() or {}).get("rest_hr"),
-                                 (self._hr_settings() or {}).get("zone_mode") or "max"),
+            "hr_zones": hr_zones((self._hr_settings() or {}).get("max_hr")),
             "hr_limit": {
                 "enabled": bool((self._hr_settings() or {}).get("hr_limit_enabled")),
                 "bpm": (self._hr_settings() or {}).get("hr_limit_bpm"),

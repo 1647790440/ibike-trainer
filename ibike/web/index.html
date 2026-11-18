@@ -133,43 +133,41 @@
       <h2>骑手信息</h2>
     </div>
 
-    <!-- 心率参数：四行一条一条列，标签和输入框对齐。
-         以前用 .row + .field 那套（给大号 FTP 输入框设计的），
-         在自动宽度的 flex 项里宽度会飘，而且输入框会继承全局 30px 的字号。 -->
-    <div class="hr-settings">
-      <div class="hr-set-row">
+    <!-- 骑手档案：四项并排，比一条条竖着列省一倍的纵向空间 -->
+    <div class="rider-grid">
+      <div class="rider-field">
         <label for="hrMaxInput">最大心率</label>
-        <input id="hrMaxInput" type="number" min="100" max="230" step="1" value="180">
-        <span class="hr-note">bpm</span>
+        <div class="rider-input">
+          <input id="hrMaxInput" type="number" min="100" max="230" step="1" value="180">
+          <span class="hr-note">bpm</span>
+        </div>
       </div>
-      <div class="hr-set-row">
+      <div class="rider-field">
         <label for="hrRestInput">静息心率</label>
-        <input id="hrRestInput" type="number" min="30" max="120" step="1" value="60">
-        <span class="hr-note">bpm</span>
+        <div class="rider-input">
+          <input id="hrRestInput" type="number" min="30" max="120" step="1" value="60">
+          <span class="hr-note">bpm</span>
+        </div>
       </div>
-      <div class="hr-set-row">
-        <label for="hrZoneMode">区间算法</label>
-        <select id="hrZoneMode">
-          <option value="max">按最大心率百分比</option>
-          <option value="reserve">按储备心率（Karvonen，更准）</option>
-        </select>
-      </div>
-      <div class="hr-set-row">
+      <div class="rider-field">
         <label class="check" for="hrLimitEnabled">
           <input id="hrLimitEnabled" type="checkbox">
           <span>上限保护</span>
         </label>
-        <input id="hrLimitInput" type="number" min="100" max="220" step="1" value="165">
-        <span class="hr-note">bpm</span>
+        <div class="rider-input">
+          <input id="hrLimitInput" type="number" min="100" max="220" step="1" value="165">
+          <span class="hr-note">bpm</span>
+        </div>
+      </div>
+      <div class="rider-field" id="ftpBlock">
+        <label for="ftpInput" title="乳酸阈值功率">FTP</label>
+        <div class="rider-input">
+          <input id="ftpInput" type="number" min="50" max="600" step="1" value="200">
+          <span class="hr-note">W</span>
+        </div>
       </div>
     </div>
 
-
-      <div id="ftpBlock" class="hr-set-row">
-        <label for="ftpInput" title="乳酸阈值功率">FTP</label>
-        <input id="ftpInput" type="number" min="50" max="600" step="1" value="200">
-        <span class="hr-note">W</span>
-      </div>
     </section>
 
     <section class="card">

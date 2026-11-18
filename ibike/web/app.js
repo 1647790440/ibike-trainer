@@ -24,7 +24,7 @@ const els = {
   btnViewReports: $('btnViewReports'), reportsView: $('reportsView'),
   connChips: $('connChips'),
   hrMaxInput: $('hrMaxInput'), hrRestInput: $('hrRestInput'),
-  hrZoneMode: $('hrZoneMode'), hrLimitEnabled: $('hrLimitEnabled'),
+  hrLimitEnabled: $('hrLimitEnabled'),
   hrLimitInput: $('hrLimitInput'),
   mHrZone: $('mHrZone'),
   targetPower: $('targetPower'), powerSlider: $('powerSlider'),
@@ -1165,7 +1165,6 @@ async function loadSettings() {
     if (st.ftp) els.ftpInput.value = st.ftp;
     if (st.hr_max) els.hrMaxInput.value = st.hr_max;
     if (st.hr_rest) els.hrRestInput.value = st.hr_rest;
-    if (st.hr_zone_mode) els.hrZoneMode.value = st.hr_zone_mode;
     els.hrLimitEnabled.checked = !!st.hr_limit_enabled;
     if (st.hr_limit_bpm) els.hrLimitInput.value = st.hr_limit_bpm;
     syncHrLimitDisabled();
@@ -1181,7 +1180,6 @@ function hrSettingsBody() {
   return {
     hr_max: Number(els.hrMaxInput.value) || 180,
     hr_rest: Number(els.hrRestInput.value) || 60,
-    hr_zone_mode: els.hrZoneMode.value,
     hr_limit_enabled: els.hrLimitEnabled.checked,
     hr_limit_bpm: Number(els.hrLimitInput.value) || 165,
   };
@@ -2636,7 +2634,6 @@ els.hrLimitEnabled.addEventListener('change', () => {
 [els.hrMaxInput, els.hrRestInput, els.hrLimitInput].forEach((el) => {
   el.addEventListener('input', scheduleHrSettingsSave);
 });
-els.hrZoneMode.addEventListener('change', scheduleHrSettingsSave);
 
 els.ftpInput.addEventListener('input', () => {
   schedulePlanRefresh();

@@ -21,8 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 _os.environ.setdefault("IBIKE_DATA_DIR",
                        tempfile.mkdtemp(prefix="ibike-test-data-"))
 
-from ibike.heartrate import (HR_MODE_MAX, HR_MODE_RESERVE,  # noqa: E402
-                             SimulatedHeartRate, hr_zone_of, hr_zones,
+from ibike.heartrate import (SimulatedHeartRate, hr_zone_of, hr_zones,  # noqa: E402
                              parse_heart_rate_measurement)
 from ibike.session import WorkoutSession  # noqa: E402
 from ibike.simulator import SimulatedTrainer  # noqa: E402
@@ -122,23 +121,17 @@ def test_zones() -> None:
     check(hr_zones(None) is None, "没设最大心率时算不出区间")
     check(hr_zone_of(150, None) is None, "没设最大心率时不猜区间")
 
-    # 储备心率（Karvonen）：同样 150bpm 会被算得更"高"
-    by_max = hr_zone_of(150, 200, 50, HR_MODE_MAX)
-    by_res = hr_zone_of(150, 200, 50, HR_MODE_RESERVE)
-    check(by_max["code"] != by_res["code"],
-          "两种算法给出不同的区间（Karvonen 更严）",
-          "{} vs {}".format(by_max["label"], by_res["label"]))
-
     # 区间必须首尾相接，不能有缝（否则心率会掉进缝里）
-    bands = hr_zones(190, 55, HR_MODE_RESERVE)
+    bands = hr_zones(190)
     for a, b in zip(bands, bands[1:]):
         check(abs(a["max_bpm"] - b["min_bpm"]) < 0.01,
               "{} 和 {} 首尾相接".format(a["code"], b["code"]),
               "{} / {}".format(a["max_bpm"], b["min_bpm"]))
 
-    # 储备心率模式下低于静息心率也归 Z1，不会返回 None
-    check(hr_zone_of(50, 190, 60, HR_MODE_RESERVE)["code"] == "Z1",
-          "低于静息心率时归 Z1")
+    # 只按最大心率算：150/200 = 75% → Z3
+    check(hr_zone_of(150, 200)["code"] == "Z3", "150 / 200 落在 Z3",
+          str(hr_zone_of(150, 200)))
+    check(hr_zone_of(50, 190)["code"] == "Z1", "低心率归 Z1")
 
 
 # ======================================================================
@@ -156,8 +149,7 @@ async def test_session_heart_rate() -> None:
     session = WorkoutSession(trainer, heart_rate=hr)
     try:
         await session.start(220.0, duration_min=10, erg_mode="auto",
-                            config={"heart_rate": {"max_hr": 190, "rest_hr": 60,
-                                                   "zone_mode": "reserve"}})
+                            config={"heart_rate": {"max_hr": 190, "rest_hr": 60}})
         await asyncio.sleep(8.0)
         snap = session.snapshot()
         check(snap["heart_rate"] is not None, "快照里有实时心率",

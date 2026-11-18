@@ -25,7 +25,6 @@ FTP_MIN, FTP_MAX, FTP_DEFAULT = 50, 600, 200
 HR_MAX_MIN, HR_MAX_MAX, HR_MAX_DEFAULT = 100, 230, 180
 HR_REST_MIN, HR_REST_MAX, HR_REST_DEFAULT = 30, 120, 60
 HR_LIMIT_MIN, HR_LIMIT_MAX, HR_LIMIT_DEFAULT = 100, 220, 165
-ZONE_MODES = ("max", "reserve")
 
 
 def settings_path() -> Path:
@@ -44,7 +43,6 @@ DEFAULTS: Dict[str, Any] = {
     "trainer_name": "",
     "hr_max": HR_MAX_DEFAULT,
     "hr_rest": HR_REST_DEFAULT,
-    "hr_zone_mode": "max",
     # 心率上限保护默认关：它会在训练中主动下调功率，得让用户明确打开
     "hr_limit_enabled": False,
     "hr_limit_bpm": HR_LIMIT_DEFAULT,
@@ -104,10 +102,6 @@ class Settings:
         if "hr_rest" in data:
             out["hr_rest"] = _clamp_int(data["hr_rest"], HR_REST_MIN, HR_REST_MAX,
                                         HR_REST_DEFAULT)
-        if "hr_zone_mode" in data:
-            mode = str(data["hr_zone_mode"] or "")
-            out["hr_zone_mode"] = mode if mode in ZONE_MODES else "max"
-        if "hr_limit_enabled" in data:
             out["hr_limit_enabled"] = bool(data["hr_limit_enabled"])
         if "hr_limit_bpm" in data:
             out["hr_limit_bpm"] = _clamp_int(data["hr_limit_bpm"], HR_LIMIT_MIN,

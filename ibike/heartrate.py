@@ -144,26 +144,14 @@ HR_ZONE_BANDS = [
     ("Z5", "最大", 0.90, float("inf")),
 ]
 
-HR_MODE_MAX = "max"           # %HRmax：需要最大心率
-HR_MODE_RESERVE = "reserve"   # 储备心率（Karvonen）：还需要静息心率，更准
-
-
-def hr_zones(max_hr: Optional[float], rest_hr: Optional[float] = None,
-             mode: str = HR_MODE_MAX) -> Optional[List[Dict[str, Any]]]:
-    """算出 5 个心率区间的绝对 bpm 边界。参数不全时返回 None。"""
+def hr_zones(max_hr: Optional[float]) -> Optional[List[Dict[str, Any]]]:
+    """算出 5 个心率区间的绝对 bpm 边界（按最大心率百分比）。没设最大心率返回 None。"""
     if not max_hr or max_hr <= 0:
         return None
-    use_reserve = mode == HR_MODE_RESERVE and rest_hr and 0 < rest_hr < max_hr
     bands = []
     for code, name, lo, hi in HR_ZONE_BANDS:
-        if use_reserve:
-            base = float(rest_hr)
-            span = float(max_hr) - base
-            lo_bpm = base + span * lo
-            hi_bpm = base + span * hi
-        else:
-            lo_bpm = float(max_hr) * lo
-            hi_bpm = float(max_hr) * hi
+        lo_bpm = float(max_hr) * lo
+        hi_bpm = float(max_hr) * hi
         bands.append({
             "code": code,
             "name": name,
@@ -174,18 +162,11 @@ def hr_zones(max_hr: Optional[float], rest_hr: Optional[float] = None,
     return bands
 
 
-def hr_zone_of(bpm: Optional[float], max_hr: Optional[float],
-               rest_hr: Optional[float] = None,
-               mode: str = HR_MODE_MAX) -> Optional[Dict[str, Any]]:
-    """一个心率值落在哪个区。算不出来（没设最大心率/值无效）时返回 None。"""
+def hr_zone_of(bpm: Optional[float], max_hr: Optional[float]) -> Optional[Dict[str, Any]]:
+    """一个心率值落在哪个区（按最大心率百分比）。算不出来时返回 None。"""
     if bpm is None or not max_hr or max_hr <= 0:
         return None
-    use_reserve = mode == HR_MODE_RESERVE and rest_hr and 0 < rest_hr < max_hr
-    if use_reserve:
-        span = float(max_hr) - float(rest_hr)
-        pct = (float(bpm) - float(rest_hr)) / span if span > 0 else 0.0
-    else:
-        pct = float(bpm) / float(max_hr)
+    pct = float(bpm) / float(max_hr)
     for code, name, lo, hi in HR_ZONE_BANDS:
         if lo <= pct < hi:
             return {"code": code, "name": name, "pct": round(pct, 4),

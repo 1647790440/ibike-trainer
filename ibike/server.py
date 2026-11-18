@@ -25,7 +25,7 @@ from aiohttp import WSMsgType, web
 from .custom import (CustomStore, build_custom_steps, course_stats, default_course,
                      normalize_course)
 from .ble import BleScanError, scan_raw
-from .heartrate import (HR_MODE_MAX, HR_MODE_RESERVE, HeartRateClient, HeartRateError,
+from .heartrate import (HeartRateClient, HeartRateError,
                         SimulatedHeartRate, hr_zone_of, hr_zones)
 from .ftptest import build_test_plan, get_test as get_ftptest, plan_stats as test_stats
 from .ftptest import clamp_params as clamp_test_params, public_tests
@@ -340,11 +340,8 @@ class Server:
             # "现在这个心率属于哪个区"。训练中则用开训时冻结的那一套
             # （改设置不该影响正在进行的这一场），所以这里只在空闲时覆盖。
             cfg = self._hr_config()
-            snap["hr_zones"] = hr_zones(cfg.get("max_hr"), cfg.get("rest_hr"),
-                                        cfg.get("zone_mode") or HR_MODE_MAX)
-            snap["hr_zone"] = hr_zone_of(snap.get("heart_rate"), cfg.get("max_hr"),
-                                        cfg.get("rest_hr"),
-                                        cfg.get("zone_mode") or HR_MODE_MAX)
+            snap["hr_zones"] = hr_zones(cfg.get("max_hr"))
+            snap["hr_zone"] = hr_zone_of(snap.get("heart_rate"), cfg.get("max_hr"))
             snap["hr_limit"] = {"enabled": bool(cfg.get("hr_limit_enabled")),
                                 "bpm": cfg.get("hr_limit_bpm"), "note": ""}
         return snap
@@ -1228,13 +1225,9 @@ class Server:
 
     def _hr_config(self) -> Dict[str, Any]:
         """这次训练用的心率参数（来自当前设置）。"""
-        mode = str(self.settings.get("hr_zone_mode", HR_MODE_MAX) or HR_MODE_MAX)
-        if mode not in (HR_MODE_MAX, HR_MODE_RESERVE):
-            mode = HR_MODE_MAX
         return {
             "max_hr": self.settings.get("hr_max"),
             "rest_hr": self.settings.get("hr_rest"),
-            "zone_mode": mode,
             "hr_limit_enabled": bool(self.settings.get("hr_limit_enabled")),
             "hr_limit_bpm": self.settings.get("hr_limit_bpm"),
         }
