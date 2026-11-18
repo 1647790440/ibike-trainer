@@ -57,7 +57,9 @@
 
 * { box-sizing: border-box; }
 
-html, body { overflow-x: hidden; }
+/* 不要用 overflow-x: hidden 压 html/body——它会让 position:sticky 失效 */
+html { overflow-x: clip; }
+body { overflow-x: clip; }
 
 body {
   margin: 0;
@@ -85,10 +87,6 @@ button { font: inherit; }
 .topbar {
   flex: 0 0 var(--rail-width);
   width: var(--rail-width);
-  align-self: flex-start;
-  position: sticky;
-  top: 0;
-  height: 100vh;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-16);
@@ -135,6 +133,17 @@ button { font: inherit; }
   margin-inline: auto;
 }
 .app > .view-main { flex: 1 1 auto; min-width: 0; padding: var(--spacing-32) var(--spacing-32) 64px; }
+
+/* 宽屏：侧栏固定不随页面滚动，连接状态和页脚永远沉在左下角 */
+@media (min-width: 901px) {
+  .topbar {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    height: auto;
+    overflow-y: auto;
+  }
+  .app > .view-main { margin-left: var(--rail-width); }
+}
 .view-main > * { max-width: var(--page-max-width); margin-inline: auto; }
 #devicesView, #trainingView, #reportsView { display: flex; flex-direction: column; gap: var(--section-gap); }
 
