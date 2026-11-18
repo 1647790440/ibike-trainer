@@ -175,7 +175,7 @@ button { font: inherit; }
 /* 一页里的卡片堆：每张卡片独立成块，块与块之间留出 16px */
 .card-stack { display: flex; flex-direction: column; gap: var(--spacing-16); }
 
-.card-head { display: flex; align-items: center; gap: var(--spacing-8); flex-wrap: wrap; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-8); flex-wrap: wrap; }
 .card-head h2 { font-size: var(--text-body-lg); font-weight: var(--w-medium); color: var(--color-ink); }
 .card-head .mt, .mt { margin-top: var(--spacing-8); }
 .hint {
@@ -510,7 +510,7 @@ input[type="range"] { accent-color: var(--color-deep-teal); width: 100%; }
 .hr-pct { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ---------------- 总结 ---------------- */
-.summary-head { display: flex; align-items: baseline; gap: var(--spacing-8); flex-wrap: wrap; }
+.summary-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--spacing-8); flex-wrap: wrap; }
 .summary-sub { font-size: var(--text-body-sm); color: var(--color-graphite); }
 .sum-hero { display: flex; align-items: flex-end; gap: var(--spacing-16); flex-wrap: wrap; padding: var(--spacing-8) 0; }
 .sum-hero-main { display: flex; align-items: baseline; gap: var(--spacing-8); }
