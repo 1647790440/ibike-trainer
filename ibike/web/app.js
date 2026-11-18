@@ -148,6 +148,7 @@ const INK = '#27251e';
 const GRAPHITE = '#72706b';
 const ASH = '#92918b';
 const MIST = '#d1d1cd';
+const TARGET_RED = '#c0392b';   // 目标功率虚线：整张图里唯一的高饱和色，必须一眼看得见
 const PAPER = '#faf8f5';
 const KIND_COLORS = {
   warmup: ASH,
@@ -1836,21 +1837,6 @@ function drawPowerChart(canvas, points, opts = {}) {
     ctx.fillText(String(Math.round(p)), padL - 6, y);
   }
 
-  // 目标功率阶梯虚线
-  ctx.save();
-  ctx.setLineDash([5, 5]);
-  ctx.strokeStyle = GRAPHITE;
-  ctx.beginPath();
-  let started = false;
-  usable.forEach((d) => {
-    if (d.target == null) return;
-    const y = Y(d.target);
-    if (!started) { ctx.moveTo(X(d.t), y); started = true; }
-    else { ctx.lineTo(X(d.t), y); }
-  });
-  if (started) ctx.stroke();
-  ctx.restore();
-
   // 功率曲线（design.md 不允许渐变，所以只有线，不铺填充）
 
   const powerSmooth = smoothSeries(usable.map((d) => d.p), 5);
@@ -1861,6 +1847,22 @@ function drawPowerChart(canvas, points, opts = {}) {
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
   ctx.stroke();
+
+  // 目标功率阶梯虚线：加粗并用红色，和实际功率（墨色）拉开
+  ctx.save();
+  ctx.setLineDash([7, 5]);
+  ctx.strokeStyle = TARGET_RED;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  let started = false;
+  usable.forEach((d) => {
+    if (d.target == null) return;
+    const y = Y(d.target);
+    if (!started) { ctx.moveTo(X(d.t), y); started = true; }
+    else { ctx.lineTo(X(d.t), y); }
+  });
+  if (started) ctx.stroke();
+  ctx.restore();
 
   // 心率曲线：右侧独立刻度。和功率画在一起是因为"同样的功率、心率一路往上爬"
   // 这件事只有两条线叠着看才看得出来（那就是有氧漂移）。
@@ -1976,6 +1978,7 @@ function drawHover(ctx, c) {
     fmtT(c.d.t) + ' 分钟处',
     '功率 ' + Math.round(c.power) + ' W',
   ];
+  if (c.d.target != null) lines.push('目标 ' + Math.round(c.d.target) + ' W');
   if (c.hr != null) lines.push('心率 ' + Math.round(c.hr) + ' bpm');
   ctx.font = '11px Inter, system-ui, sans-serif';
   const lh = 15;
