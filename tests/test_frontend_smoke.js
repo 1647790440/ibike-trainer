@@ -608,6 +608,20 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   check(list.children.length === 2, '报告列表渲染出两条记录',
         String(list.children.length) + ' 条');
 
+  // 训练日历：按月一格一天，有训练的日子要标出来
+  console.log('\n[9b] 训练日历');
+  const calCells = getEl('calendarGrid').children;
+  check(calCells.length % 7 === 0 && calCells.length >= 28,
+        '日历是整周的格子', String(calCells.length) + ' 格');
+  check(/^\d{4}年\d{1,2}月$/.test(getEl('calLabel').textContent),
+        '显示了年月', getEl('calLabel').textContent);
+  const trained = [...calCells].filter((c) => c.classList.contains('trained'));
+  check(trained.length >= 1, '有训练的日子被标出来了', String(trained.length) + ' 天');
+  check(trained.every((c) => !!c.title && c.title.indexOf('次') >= 0),
+        '标出来的日子带悬停说明', trained.length ? trained[0].title : '');
+  check(getEl('calendarPanel').classList.contains('hidden') === false,
+        '空闲时日历和列表一起显示');
+
   // 打开其中一份
   await context.openReport('r1');
   check(!getEl('summaryPanel').classList.contains('hidden'),

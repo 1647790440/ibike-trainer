@@ -113,7 +113,8 @@ button { font: inherit; }
 .vtab:hover { color: var(--color-ink); background: var(--color-soft-paper); }
 .vtab.on { background: var(--color-deep-teal); color: var(--color-parchment); }
 
-.conn-chips { display: flex; flex-direction: column; gap: var(--spacing-4); margin-top: var(--spacing-8); }
+/* 连接状态贴到左下角：nav 之后用 auto 把它推到底部（页脚在它下面一行） */
+.conn-chips { display: flex; flex-direction: column; gap: var(--spacing-4); margin-top: auto; }
 .conn-chip {
   display: inline-flex; align-items: center; gap: var(--spacing-4);
   padding: 2px var(--spacing-8); border-radius: var(--radius-chips);
@@ -124,7 +125,7 @@ button { font: inherit; }
 .conn-chip.on { background: var(--color-deep-teal); color: var(--color-parchment); border-color: var(--color-deep-teal); }
 
 .foot {
-  margin-top: auto; padding: 0 var(--spacing-8);
+  padding: 0 var(--spacing-8);
   font-size: var(--text-caption); color: var(--color-ash); line-height: var(--leading-body);
 }
 
@@ -579,6 +580,36 @@ canvas#customPlanChart { height: 100px; }
 canvas#testPlanChart   { height: 100px; }
 canvas#testChart       { height: 64px; }
 canvas#ivChart         { height: 64px; }
+
+/* ---------------- 训练日历 ---------------- */
+.calendar-nav { margin-left: auto; display: flex; align-items: center; gap: var(--spacing-8); }
+.cal-label { font-size: var(--text-body); color: var(--color-ink); font-variant-numeric: tabular-nums; min-width: 88px; text-align: center; }
+.cal-weekdays {
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--spacing-4); padding: 0 2px;
+  font-size: var(--text-caption); color: var(--color-ash);
+}
+.cal-weekdays span { text-align: center; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--spacing-4); }
+.cal-day {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  height: 40px;
+  border-radius: var(--radius-inputs);
+  background: var(--color-parchment);
+  color: var(--color-graphite);
+  font-size: var(--text-body-sm);
+  font-variant-numeric: tabular-nums;
+}
+.cal-day.out { color: var(--color-warm-mist); background: transparent; }
+.cal-day.today { box-shadow: inset 0 0 0 1px var(--color-ink); }
+.cal-day.trained { background: var(--color-deep-teal); color: var(--color-parchment); font-weight: var(--w-medium); }
+.cal-day.trained.out { background: var(--color-warm-mist); color: var(--color-graphite); }
+.cal-num { line-height: 1; }
+.cal-count {
+  position: absolute; right: 3px; bottom: 2px;
+  font-size: 9px; color: var(--color-parchment); opacity: 0.85;
+}
 
 /* ---------------- 响应式：窄屏把左栏折成顶栏 ---------------- */
 @media (max-width: 900px) {

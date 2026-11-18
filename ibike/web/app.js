@@ -54,6 +54,9 @@ const els = {
   trFormula: $('trFormula'), trDetail: $('trDetail'), trInvalid: $('trInvalid'),
   btnUseFtp: $('btnUseFtp'),
   reportsPanel: $('reportsPanel'), reportsList: $('reportsList'),
+  calendarPanel: $('calendarPanel'), calendarGrid: $('calendarGrid'),
+  calLabel: $('calLabel'), calHint: $('calHint'),
+  btnCalPrev: $('btnCalPrev'), btnCalNext: $('btnCalNext'), btnCalToday: $('btnCalToday'),
   reportsEmpty: $('reportsEmpty'), btnClearReports: $('btnClearReports'),
   btnDeleteReport: $('btnDeleteReport'),
   planBadge: $('planBadge'), intervalBar: $('intervalBar'),
@@ -343,6 +346,7 @@ function render(s) {
   // 打开一份报告时把列表收起来：两份内容叠着看既挤又容易分不清在看在选。
   // 「返回报告列表」会把它放回来。
   els.reportsPanel.classList.toggle('hidden', showingSummary);
+  if (els.calendarPanel) els.calendarPanel.classList.toggle('hidden', showingSummary);
   els.btnStart.disabled = !connected || running || startPending;
 
   // 新的训练报告落盘后刷新列表，并把用户带到报告页（训练结束要看的就是这份总结）
@@ -1880,6 +1884,110 @@ function drawChart() {
  * 训练报告
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * 训练日历
+ * 一个月一屏，有训练的日子填上深青——"哪天骑了、哪天没骑"一眼看得出来。
+ * 数据来自报告列表（started_at），所以不需要后端额外接口。
+ * ------------------------------------------------------------------ */
+
+let calMonth = null;   // 当前显示的月份，存当月 1 号
+
+function dayKey(d) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
+function renderCalendar() {
+  const grid = els.calendarGrid;
+  if (!grid) return;
+  const now = new Date();
+  // 默认显示"最近一次训练所在的月份"：刚骑完看一眼报告页，不至于看到一个空月份。
+  // 「本月」按钮随时回到当前月。
+  if (!calMonth) {
+    const latest = reportList
+      .map((r) => r.started_at || r.finished_at || r.saved_at)
+      .filter(Boolean)
+      .sort((a, b) => b - a)[0];
+    const base = latest ? new Date(latest * 1000) : now;
+    calMonth = new Date(base.getFullYear(), base.getMonth(), 1);
+  }
+  const year = calMonth.getFullYear();
+  const month = calMonth.getMonth();
+
+  // 按本地日期把训练聚合起来：这一天骑了几次、一共多久
+  const byDay = {};
+  reportList.forEach((r) => {
+    const ts = r.started_at || r.finished_at || r.saved_at;
+    if (!ts) return;
+    const key = dayKey(new Date(ts * 1000));
+    if (!byDay[key]) byDay[key] = { count: 0, seconds: 0 };
+    byDay[key].count += 1;
+    byDay[key].seconds += (r.actual_s || 0);
+  });
+
+  els.calLabel.textContent = year + '年' + (month + 1) + '月';
+
+  const first = new Date(year, month, 1);
+  const lead = (first.getDay() + 6) % 7;              // 周一为一周第一天
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const prevMonthDays = new Date(year, month, 0).getDate();
+  const cells = Math.ceil((lead + daysInMonth) / 7) * 7;
+  const todayKey = dayKey(now);
+
+  grid.innerHTML = '';
+  let trainedDays = 0;
+  let monthSessions = 0;
+  let monthSeconds = 0;
+
+  for (let i = 0; i < cells; i += 1) {
+    const offset = i - lead;
+    let date;
+    let out = false;
+    if (offset < 0) {
+      date = new Date(year, month - 1, prevMonthDays + offset + 1);
+      out = true;
+    } else if (offset >= daysInMonth) {
+      date = new Date(year, month + 1, offset - daysInMonth + 1);
+      out = true;
+    } else {
+      date = new Date(year, month, offset + 1);
+    }
+    const key = dayKey(date);
+    const info = byDay[key];
+    const cell = document.createElement('div');
+    cell.className = 'cal-day'
+      + (out ? ' out' : '')
+      + (key === todayKey ? ' today' : '')
+      + (info ? ' trained' : '');
+    cell.setAttribute('role', 'gridcell');
+    if (!out && info) {
+      trainedDays += 1;
+      monthSessions += info.count;
+      monthSeconds += info.seconds;
+      cell.title = (date.getMonth() + 1) + '月' + date.getDate() + '日 · '
+        + info.count + ' 次 · ' + fmtClock(info.seconds);
+    } else if (!out) {
+      cell.title = (date.getMonth() + 1) + '月' + date.getDate() + '日 · 没骑';
+    }
+    const num = document.createElement('span');
+    num.className = 'cal-num';
+    num.textContent = date.getDate();
+    cell.appendChild(num);
+    if (!out && info && info.count > 1) {
+      const dot = document.createElement('span');
+      dot.className = 'cal-count';
+      dot.textContent = info.count;
+      cell.appendChild(dot);
+    }
+    grid.appendChild(cell);
+  }
+
+  els.calHint.textContent = trainedDays
+    ? '本月骑了 ' + trainedDays + ' 天 · 共 ' + monthSessions + ' 次 · '
+      + fmtClock(monthSeconds)
+    : '本月还没有训练记录';
+}
+
 async function loadReports() {
   try {
     const res = await fetch('/api/reports', { cache: 'no-store' });
@@ -1900,6 +2008,7 @@ function fmtDateTime(ts) {
 }
 
 function renderReports() {
+  renderCalendar();
   els.reportsList.innerHTML = '';
   els.reportsEmpty.classList.toggle('hidden', reportList.length > 0);
   els.btnClearReports.classList.toggle('hidden', reportList.length === 0);
@@ -2713,6 +2822,20 @@ function renderTestPlanPreview() {
 els.btnViewDevices.addEventListener('click', () => switchView('devices'));
 els.btnViewTraining.addEventListener('click', () => switchView('training'));
 els.btnViewReports.addEventListener('click', () => switchView('reports'));
+els.btnCalPrev.addEventListener('click', () => {
+  if (!calMonth) renderCalendar();
+  calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1);
+  renderCalendar();
+});
+els.btnCalNext.addEventListener('click', () => {
+  if (!calMonth) renderCalendar();
+  calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1);
+  renderCalendar();
+});
+els.btnCalToday.addEventListener('click', () => {
+  calMonth = null;
+  renderCalendar();
+});
 
 (async function boot() {
   try {

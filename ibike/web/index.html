@@ -513,6 +513,24 @@
   </section>
 
   <!-- ================= 训练报告 ================= -->
+  <!-- 训练日历：一眼看出哪些天骑了、哪些天没骑 -->
+  <section id="calendarPanel" class="card">
+    <div class="card-head">
+      <h2>训练日历</h2>
+      <div class="calendar-nav">
+        <button id="btnCalPrev" class="btn btn-mini" type="button" aria-label="上个月">‹</button>
+        <span id="calLabel" class="cal-label"></span>
+        <button id="btnCalNext" class="btn btn-mini" type="button" aria-label="下个月">›</button>
+        <button id="btnCalToday" class="btn btn-mini" type="button">本月</button>
+      </div>
+    </div>
+    <div class="cal-weekdays" aria-hidden="true">
+      <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+    </div>
+    <div id="calendarGrid" class="cal-grid" role="grid" aria-label="训练日历"></div>
+    <p class="hint" id="calHint"></p>
+  </section>
+
   <section id="reportsPanel" class="card">
     <div class="card-head">
       <h2>训练报告</h2>
