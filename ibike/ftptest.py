@@ -34,7 +34,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .workouts import KIND_COOLDOWN, KIND_RECOVERY, KIND_WARMUP, KIND_WORK, make_step
 

@@ -32,8 +32,8 @@ const els = {
   btnStart: $('btnStart'), startHint: $('startHint'), rideNotice: $('rideNotice'),
   btnOverlay: $('btnOverlay'), overlayHint: $('overlayHint'),
   constantFields: $('constantFields'), intervalFields: $('intervalFields'),
-  customFields: $('customFields'), ftpBlock: $('ftpBlock'), ftpHint: $('ftpHint'),
-  ftpInput: $('ftpInput'), templateList: $('templateList'), templateDesc: $('templateDesc'),
+  customFields: $('customFields'),
+  ftpInput: $('ftpInput'), templateList: $('templateList'),
   templateParams: $('templateParams'), planChart: $('planChart'),
   planStats: $('planStats'), planList: $('planList'),
   customList: $('customList'), customEmpty: $('customEmpty'),
@@ -44,7 +44,7 @@ const els = {
   customPlanStats: $('customPlanStats'), customPlanList: $('customPlanList'),
   btnSaveCourse: $('btnSaveCourse'), btnDeleteCourse: $('btnDeleteCourse'),
   saveHint: $('saveHint'),
-  testFields: $('testFields'), testList: $('testList'), testDesc: $('testDesc'),
+  testFields: $('testFields'), testList: $('testList'),
   testParams: $('testParams'), testPlanChart: $('testPlanChart'),
   testPlanStats: $('testPlanStats'), testPlanList: $('testPlanList'),
   testBar: $('testBar'), testName: $('testName'), testLevel: $('testLevel'),
@@ -84,7 +84,7 @@ const els = {
   sumMode: $('sumMode'), sumInZone: $('sumInZone'), sumInZoneBar: $('sumInZoneBar'),
   sumQualityLabel: $('sumQualityLabel'), sumQualityNote: $('sumQualityNote'),
   sumChart: $('sumChart'),
-  sumMetrics: $('sumMetrics'), sumDist: $('sumDist'), sumDistHint: $('sumDistHint'),
+  sumMetrics: $('sumMetrics'), sumDist: $('sumDist'),
   btnAgain: $('btnAgain'), btnDismiss: $('btnDismiss'),
 };
 
@@ -930,7 +930,6 @@ function selectTemplate(id) {
   paramValues = {};
   (t && t.params ? t.params : []).forEach((p) => { paramValues[p.key] = p.default; });
   renderTemplateCards();
-  els.templateDesc.textContent = '';
   renderParamEditor();
   refreshPlan();
 }
@@ -1080,7 +1079,6 @@ function selectTest(id) {
   testParamValues = {};
   (t && t.params ? t.params : []).forEach((p) => { testParamValues[p.key] = p.default; });
   renderTestCards();
-  els.testDesc.textContent = '';
   renderTestParamEditor();
   refreshTestPlan();
 }
@@ -2646,18 +2644,9 @@ function applySetupMode(mode) {
     // 启动时那一次 /api/templates 万一失败，这里要能重试，否则间歇标签页
     // 永远是空的，"开始训练"只会回一句"未知的训练方案"，只能刷新页面
     if (!templates.length) loadTemplates();
-    if (els.ftpHint) els.ftpHint.textContent =
-      '强度都按这个值的百分比计算——乳酸阈值因人而异，只有表达成阈值百分比才算科学。'
-      + '不确定的话：FTP ≈ 你能全力骑 20 分钟的平均功率 × 0.95，或者先用 200W 试一次。';
   } else if (mode === 'custom') {
-    if (els.ftpHint) els.ftpHint.textContent =
-      '课程里的小节按 %FTP 表示时会用这个值折算成瓦数；'
-      + '按绝对瓦数表示的小节不受它影响。';
     loadCustomCourses();
   } else if (mode === 'test') {
-    if (els.ftpHint) els.ftpHint.textContent =
-      '这个值影响测试课表里"轻松骑"这类陪衬段的强度，以及方案预览。'
-      + '测试的结论不依赖它——测出来的 FTP 会覆盖它。';
     loadFtpTests();
   }
 }
