@@ -957,7 +957,7 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   // 标题行右侧那枚只显示骑行台的连接标识已删掉（心率带状态它显示不了，容易误导）
   check(html.indexOf('id="connPill"') < 0, '标题行不再放过时的连接标识');
   check(html.indexOf('id="connName"') < 0, '标题行也不再放设备名');
-  ['1. 扫描与连接', '2. 骑行台', '3. 心率带'].forEach((h) => {
+  ['扫描与连接', '骑行台', '心率带'].forEach((h) => {
     check(html.indexOf('<h2>' + h + '</h2>') >= 0, '设备页有「' + h + '」这一块');
   });
 
@@ -982,7 +982,7 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   const span = sectionSpan(html, 'devicesView');
   if (check(!!span, '找得到 devicesView 的范围',
             span ? ('长度 ' + span.length) : '没找到')) {
-    ['1. 扫描与连接', '2. 骑行台', '3. 心率带'].forEach((h) => {
+    ['扫描与连接', '骑行台', '心率带'].forEach((h) => {
       check(span.indexOf('<h2>' + h + '</h2>') >= 0,
             '「' + h + '」在 devicesView 里面（切到训练页会被一起藏起来）');
     });

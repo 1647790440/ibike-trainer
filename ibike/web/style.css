@@ -172,6 +172,9 @@ button { font: inherit; }
   box-shadow: var(--shadow-subtle);
   display: flex; flex-direction: column; gap: var(--spacing-12);
 }
+/* 一页里的卡片堆：每张卡片独立成块，块与块之间留出 16px */
+.card-stack { display: flex; flex-direction: column; gap: var(--spacing-16); }
+
 .card-head { display: flex; align-items: center; gap: var(--spacing-8); flex-wrap: wrap; }
 .card-head h2 { font-size: var(--text-body-lg); font-weight: var(--w-medium); color: var(--color-ink); }
 .card-head .mt, .mt { margin-top: var(--spacing-8); }
@@ -583,7 +586,7 @@ canvas { display: block; width: 100%; max-width: 100%; background: transparent; 
 /* 每块画布的 CSS 高度必须钉死，且与 app.js 的 CANVAS_HEIGHT 一致——
    否则位图尺寸会反过来撑大布局，每画一次就大一圈。这些规则必须放在最后。 */
 canvas#chart           { height: 180px; }
-canvas#sumChart        { height: 180px; }
+canvas#sumChart        { height: 340px; }
 canvas#planChart       { height: 100px; }
 canvas#customPlanChart { height: 100px; }
 canvas#testPlanChart   { height: 100px; }

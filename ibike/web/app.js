@@ -108,7 +108,7 @@ function targetTolerance(target) {
    影响布局。 */
 const CANVAS_HEIGHT = {
   chart: 180,
-  sumChart: 180,
+  sumChart: 340,
   planChart: 100,
   customPlanChart: 100,
   testPlanChart: 100,
