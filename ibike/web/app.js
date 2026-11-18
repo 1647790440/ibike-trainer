@@ -340,8 +340,9 @@ function render(s) {
   els.setupPanel.classList.toggle('hidden', running);
   els.livePanel.classList.toggle('hidden', !showLive);
   els.summaryPanel.classList.toggle('hidden', !showingSummary);
-  // 报告页上列表和总结是一上一下：看总结时不要把列表藏了，方便接着点下一份
-  els.reportsPanel.classList.toggle('hidden', false);
+  // 打开一份报告时把列表收起来：两份内容叠着看既挤又容易分不清在看在选。
+  // 「返回报告列表」会把它放回来。
+  els.reportsPanel.classList.toggle('hidden', showingSummary);
   els.btnStart.disabled = !connected || running || startPending;
 
   // 新的训练报告落盘后刷新列表，并把用户带到报告页（训练结束要看的就是这份总结）

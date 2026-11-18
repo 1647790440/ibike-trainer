@@ -129,7 +129,7 @@ button { font: inherit; }
 }
 
 /* 主列：900px 居中 */
-.tab-content, #devicesView, #trainingView, #reportsView, #banner, #summaryPanel, .reports-wrap {
+.tab-content, #devicesView, #trainingView, #reportsView, #banner, .reports-wrap {
   max-width: var(--page-max-width);
   margin-inline: auto;
 }

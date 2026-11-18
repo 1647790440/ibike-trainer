@@ -617,8 +617,8 @@ const boundIds = new Set(elementListeners.map((l) => l.id));
   // 看完一份可以直接点下一份（以前列表会被藏起来，等于锁死在那一份上）。
   check(getEl('reportsView').classList.contains('hidden') === false,
         '打开报告后切到「3 报告」页');
-  check(getEl('reportsPanel').classList.contains('hidden') === false,
-        '报告页上列表留着，方便接着看下一份');
+  check(getEl('reportsPanel').classList.contains('hidden') === true,
+        '打开报告后列表收起（不叠在一起）');
 
   // 看完报告切回训练页：设定面板必须还在（之前只剩运行日志，因为可见性判断里
   // 还带着"正在看总结"这个条件，而总结已经搬到报告页了）。
