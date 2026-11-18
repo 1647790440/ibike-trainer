@@ -1750,6 +1750,45 @@ async function deleteCourse() {
 
 /* 通用功率曲线绘制。points 里每项是 {t(毫秒), p(瓦), target(瓦)}。
    目标功率画成阶梯虚线，这样训练中途改过目标也能如实反映出来。 */
+/* 显示用的平滑：三点加权移动平均 [1,2,3,2,1]/9，两端自动收窄核。
+ * 只作用于画线，不改报告里的数据，也不影响任何统计值。
+ * 报告里的 trace 是 min/max 抽样（保留尖峰很有价值），直接连起来锯齿感很重，
+ * 平滑之后形状和趋势都还在，只是不再"上下乱跳"。 */
+function smoothSeries(values, window) {
+  const n = values.length;
+  const half = Math.max(1, Math.floor((window || 5) / 2));
+  const kernel = [1, 2, 3, 2, 1];
+  const out = new Array(n);
+  for (let i = 0; i < n; i += 1) {
+    let sum = 0;
+    let weight = 0;
+    for (let k = -half; k <= half; k += 1) {
+      const j = i + k;
+      if (j < 0 || j >= n) continue;
+      const v = values[j];
+      if (!Number.isFinite(v)) continue;
+      const w = kernel[Math.min(kernel.length - 1, Math.abs(k))] || 1;
+      sum += v * w;
+      weight += w;
+    }
+    out[i] = weight > 0 ? sum / weight : values[i];
+  }
+  return out;
+}
+
+/* 平滑地连线：用相邻点的中点做二次贝塞尔，不会过冲（比 Catmull-Rom 安全） */
+function traceCurve(ctx, pts, toX, toY) {
+  if (!pts.length) return;
+  ctx.moveTo(toX(pts[0].t), toY(pts[0].v));
+  for (let i = 1; i < pts.length - 1; i += 1) {
+    const x0 = toX(pts[i].t), y0 = toY(pts[i].v);
+    const x1 = toX(pts[i + 1].t), y1 = toY(pts[i + 1].v);
+    ctx.quadraticCurveTo(x0, y0, (x0 + x1) / 2, (y0 + y1) / 2);
+  }
+  const last = pts[pts.length - 1];
+  ctx.lineTo(toX(last.t), toY(last.v));
+}
+
 function drawPowerChart(canvas, points, opts = {}) {
   const fitted = fitCanvas(canvas, 180);
   const ctx = fitted.ctx;
@@ -1817,11 +1856,10 @@ function drawPowerChart(canvas, points, opts = {}) {
 
   // 功率曲线（design.md 不允许渐变，所以只有线，不铺填充）
 
+  const powerSmooth = smoothSeries(usable.map((d) => d.p), 5);
+  const powerPts = usable.map((d, i) => ({ t: d.t, v: powerSmooth[i] }));
   ctx.beginPath();
-  ctx.moveTo(X(usable[0].t), Y(usable[0].p));
-  for (let i = 1; i < usable.length; i++) {
-    ctx.lineTo(X(usable[i].t), Y(usable[i].p));
-  }
+  traceCurve(ctx, powerPts, X, Y);
   ctx.strokeStyle = INK;
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
@@ -1840,12 +1878,11 @@ function drawPowerChart(canvas, points, opts = {}) {
     const spanHr = Math.max(1, hi - lo);
     const Yhr = (v) => padT + h - ((Math.max(lo, Math.min(hi, v)) - lo) / spanHr) * h;
 
+    const hrSmooth = smoothSeries(hrPoints.map((d) => d.hr), 5);
+    const hrSeries = hrPoints.map((d, i) => ({ t: d.t, v: hrSmooth[i] }));
     ctx.save();
     ctx.beginPath();
-    ctx.moveTo(X(hrPoints[0].t), Yhr(hrPoints[0].hr));
-    for (let i = 1; i < hrPoints.length; i++) {
-      ctx.lineTo(X(hrPoints[i].t), Yhr(hrPoints[i].hr));
-    }
+    traceCurve(ctx, hrSeries, X, Yhr);
     ctx.strokeStyle = MIST;
     ctx.lineWidth = 1.5;
     ctx.lineJoin = 'round';
