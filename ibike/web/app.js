@@ -2471,7 +2471,7 @@ function applySetupMode(mode) {
   els.intervalFields.classList.toggle('hidden', mode !== 'interval');
   els.customFields.classList.toggle('hidden', mode !== 'custom');
   els.testFields.classList.toggle('hidden', mode !== 'test');
-  els.ftpBlock.classList.toggle('hidden', mode === 'constant');
+  // FTP 现在是「骑手信息」的一部分，任何模式都显示（不再跟着模式隐藏）
 
   if (mode === 'interval') {
     // 启动时那一次 /api/templates 万一失败，这里要能重试，否则间歇标签页

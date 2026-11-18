@@ -114,6 +114,14 @@
     </div>
     <p id="hrHint" class="hint">还没连接（可选）</p>
   </section>
+  <section class="card">
+    <div class="card-head">
+      <h2>运行日志</h2>
+      <button id="btnClearLog" class="btn btn-mini">清空</button>
+    </div>
+    <ul id="log" class="log"></ul>
+  </section>
+
   </section><!-- /devicesView -->
 
   <!-- ================= 视图 2：训练 ================= -->
@@ -122,7 +130,7 @@
   <section id="setupPanel" class="card-stack">
     <section class="card">
     <div class="card-head">
-      <h2>心率参数</h2>
+      <h2>骑手信息</h2>
     </div>
 
     <!-- 心率参数：四行一条一条列，标签和输入框对齐。
@@ -157,6 +165,13 @@
     </div>
 
 
+      <div id="ftpBlock" class="field">
+        <label for="ftpInput">FTP（乳酸阈值功率）</label>
+        <div class="power-row">
+          <input id="ftpInput" type="number" min="50" max="600" step="1" value="200">
+          <span class="unit">W</span>
+        </div>
+      </div>
     </section>
 
     <section class="card">
@@ -165,20 +180,10 @@
     </div>
 
     <div class="tabs">
+      <button type="button" class="tab" data-mode="custom">自定义课程</button>
       <button type="button" class="tab on" data-mode="constant">恒定功率</button>
       <button type="button" class="tab" data-mode="interval">间歇训练 HIIT</button>
-      <button type="button" class="tab" data-mode="custom">自定义课程</button>
       <button type="button" class="tab" data-mode="test">FTP 测试</button>
-    </div>
-
-    <!-- FTP 由间歇训练和自定义课程共用 -->
-    <div id="ftpBlock" class="field hidden">
-      <label for="ftpInput">你的 FTP（乳酸阈值功率）</label>
-      <div class="power-row">
-        <input id="ftpInput" type="number" min="50" max="600" step="1" value="200">
-        <span class="unit">W</span>
-      </div>
-
     </div>
 
     <!-- ---------- 恒定功率 ---------- -->
@@ -419,14 +424,6 @@
   </section>
 
   <!-- ================= 训练总结 ================= -->
-  <section class="card">
-    <div class="card-head">
-      <h2>运行日志</h2>
-      <button id="btnClearLog" class="btn btn-mini">清空</button>
-    </div>
-    <ul id="log" class="log"></ul>
-  </section>
-
   </section><!-- /trainingView -->
 
   <!-- ================= 视图 3：报告 =================
