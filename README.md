@@ -143,9 +143,14 @@ ibike/web/         前端（原生 HTML/CSS/JS，无需构建）
 overlay.py         悬浮窗（macOS 原生窗口）
 ```
 
-设计取舍和协议细节在 `docs/`：`design-notes.md`（为什么这样实现）、
-`heart-rate-features.md`（心率功能）、`overlay.md`（悬浮窗）、
-`packaging-options.md`（打包可行性）。
+设计取舍和协议细节在 `docs/`：
+
+- `design-notes.md` —— 实现思路与踩过的坑
+- `design-system.md` —— 界面配色/字体/间距的规范
+- `heart-rate-features.md` —— 心率相关功能
+- `training-methods.md` —— 训练方法学
+- `overlay.md` —— 悬浮窗
+- `packaging-options.md` —— 打包成独立 App 的可行性
 
 ## 许可
 
