@@ -269,7 +269,7 @@ input[type="range"] { accent-color: var(--color-deep-teal); width: 100%; }
 .check input { width: 16px; height: 16px; accent-color: var(--color-deep-teal); }
 .hr-note { font-size: var(--text-body-sm); color: var(--color-graphite); }
 /* 骑手档案：四项并排 */
-.rider-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--spacing-12) var(--spacing-16); }
+.rider-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--spacing-12) var(--spacing-16); }
 .rider-field { display: flex; flex-direction: column; gap: var(--spacing-4); min-width: 0; }
 .rider-field > label { font-size: var(--text-body-sm); color: var(--color-graphite); }
 .rider-field > label.check { display: flex; align-items: center; gap: var(--spacing-4); font-size: var(--text-body-sm); }

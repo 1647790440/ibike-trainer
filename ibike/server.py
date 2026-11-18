@@ -684,7 +684,7 @@ class Server:
             # 心率区间都能在没有硬件时先看一遍。模拟台的功率喂给它是为了让
             # 心率跟着功率上下——真实心率就是这个脾气（有滞后）。
             sim_hr = SimulatedHeartRate(
-                rest_hr=float(self.settings.get("hr_rest", 60) or 60),
+                rest_hr=60.0,
                 max_hr=float(self.settings.get("hr_max", 180) or 180),
             )
             trainer.on_data = lambda d: sim_hr.set_power(d.get("power_w") or 0)
@@ -1227,7 +1227,6 @@ class Server:
         """这次训练用的心率参数（来自当前设置）。"""
         return {
             "max_hr": self.settings.get("hr_max"),
-            "rest_hr": self.settings.get("hr_rest"),
             "hr_limit_enabled": bool(self.settings.get("hr_limit_enabled")),
             "hr_limit_bpm": self.settings.get("hr_limit_bpm"),
         }

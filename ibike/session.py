@@ -1212,7 +1212,6 @@ class WorkoutSession:
                             "pct": (round(100.0 * c / total, 1) if total > 0 else 0.0)}
                            for z, c in zip(zones, counts)] if zones else []),
                 "max_hr": band.get("max_hr"),
-                "rest_hr": band.get("rest_hr"),
                 "cap_active": bool(band.get("hr_limit_enabled")),
                 "cap_bpm": band.get("hr_limit_bpm"),
                 "cap_note": self._hr_cap_note,

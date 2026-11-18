@@ -42,7 +42,6 @@ DEFAULTS: Dict[str, Any] = {
     "trainer_address": "",
     "trainer_name": "",
     "hr_max": HR_MAX_DEFAULT,
-    "hr_rest": HR_REST_DEFAULT,
     # 心率上限保护默认关：它会在训练中主动下调功率，得让用户明确打开
     "hr_limit_enabled": False,
     "hr_limit_bpm": HR_LIMIT_DEFAULT,
@@ -99,10 +98,6 @@ class Settings:
         if "hr_max" in data:
             out["hr_max"] = _clamp_int(data["hr_max"], HR_MAX_MIN, HR_MAX_MAX,
                                        HR_MAX_DEFAULT)
-        if "hr_rest" in data:
-            out["hr_rest"] = _clamp_int(data["hr_rest"], HR_REST_MIN, HR_REST_MAX,
-                                        HR_REST_DEFAULT)
-            out["hr_limit_enabled"] = bool(data["hr_limit_enabled"])
         if "hr_limit_bpm" in data:
             out["hr_limit_bpm"] = _clamp_int(data["hr_limit_bpm"], HR_LIMIT_MIN,
                                              HR_LIMIT_MAX, HR_LIMIT_DEFAULT)

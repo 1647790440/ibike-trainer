@@ -23,7 +23,7 @@ const els = {
   btnViewDevices: $('btnViewDevices'), btnViewTraining: $('btnViewTraining'),
   btnViewReports: $('btnViewReports'), reportsView: $('reportsView'),
   connChips: $('connChips'),
-  hrMaxInput: $('hrMaxInput'), hrRestInput: $('hrRestInput'),
+  hrMaxInput: $('hrMaxInput'),
   hrLimitEnabled: $('hrLimitEnabled'),
   hrLimitInput: $('hrLimitInput'),
   mHrZone: $('mHrZone'),
@@ -711,6 +711,7 @@ function renderSummary(sum) {
   drawPowerChart(els.sumChart, points, {
     emptyText: '这次训练没有采集到功率数据',
     hrMax: (sum.heart_rate || {}).max_bpm,
+    interactive: true,
   });
 
   // FTP 测试结果
@@ -1164,7 +1165,6 @@ async function loadSettings() {
     const st = data.settings || {};
     if (st.ftp) els.ftpInput.value = st.ftp;
     if (st.hr_max) els.hrMaxInput.value = st.hr_max;
-    if (st.hr_rest) els.hrRestInput.value = st.hr_rest;
     els.hrLimitEnabled.checked = !!st.hr_limit_enabled;
     if (st.hr_limit_bpm) els.hrLimitInput.value = st.hr_limit_bpm;
     syncHrLimitDisabled();
@@ -1179,7 +1179,6 @@ function syncHrLimitDisabled() {
 function hrSettingsBody() {
   return {
     hr_max: Number(els.hrMaxInput.value) || 180,
-    hr_rest: Number(els.hrRestInput.value) || 60,
     hr_limit_enabled: els.hrLimitEnabled.checked,
     hr_limit_bpm: Number(els.hrLimitInput.value) || 165,
   };
@@ -1866,6 +1865,9 @@ function drawPowerChart(canvas, points, opts = {}) {
   // 心率曲线：右侧独立刻度。和功率画在一起是因为"同样的功率、心率一路往上爬"
   // 这件事只有两条线叠着看才看得出来（那就是有氧漂移）。
   const hrPoints = usable.filter((d) => Number.isFinite(d.hr));
+  let hrSeries = null;
+  let hrSmooth = null;
+  let Yhr = null;
   if (hrPoints.length >= 2) {
     // 心率的纵轴范围取数据本身的上下各留 10 的余量，不和功率共用刻度
     let lo = Infinity, hi = -Infinity;
@@ -1874,10 +1876,10 @@ function drawPowerChart(canvas, points, opts = {}) {
     lo = Math.max(30, lo - pad);
     hi = hi + pad;
     const spanHr = Math.max(1, hi - lo);
-    const Yhr = (v) => padT + h - ((Math.max(lo, Math.min(hi, v)) - lo) / spanHr) * h;
+    Yhr = (v) => padT + h - ((Math.max(lo, Math.min(hi, v)) - lo) / spanHr) * h;
 
-    const hrSmooth = smoothSeries(hrPoints.map((d) => d.hr), 5);
-    const hrSeries = hrPoints.map((d, i) => ({ t: d.t, v: hrSmooth[i] }));
+    hrSmooth = smoothSeries(hrPoints.map((d) => d.hr), 5);
+    hrSeries = hrPoints.map((d, i) => ({ t: d.t, v: hrSmooth[i] }));
     ctx.save();
     ctx.beginPath();
     traceCurve(ctx, hrSeries, X, Yhr);
@@ -1907,6 +1909,128 @@ function drawPowerChart(canvas, points, opts = {}) {
   ctx.textAlign = 'right';
   ctx.fillText(hrPoints.length >= 2 ? '功率 W ／ 心率 bpm' : '功率 W',
     padL + w, padT + h + 5);
+
+  if (!opts.interactive) return;
+
+  // 光标悬停：竖线 + 两个点 + 一个小读数框，显示那一刻的功率和心率
+  canvas.__chart = {
+    points, opts, usable, powerSmooth,
+    hrSeries: hrPoints.length >= 2 ? { pts: hrSeries, smooth: hrSmooth } : null,
+    X, Y, Yhr: hrPoints.length >= 2 ? Yhr : null,
+  };
+  if (opts.hoverT != null) {
+    const idx = nearestIndex(usable, opts.hoverT);
+    drawHover(ctx, {
+      d: usable[idx], power: powerSmooth[idx],
+      hr: hrPoints.length >= 2 ? hrSmooth[nearestIndex(hrPoints, usable[idx].t)] : null,
+      x: X(usable[idx].t), y: Y(powerSmooth[idx]),
+      yHr: hrPoints.length >= 2 ? Yhr(hrPoints[nearestIndex(hrPoints, usable[idx].t)].hr) : null,
+      padT, padL, w, h, cssW,
+    });
+  }
+  attachChartHover(canvas);
+}
+
+/* 找到时间上最接近的位置 */
+function nearestIndex(points, t) {
+  let lo = 0, hi = points.length - 1;
+  if (t <= points[0].t) return 0;
+  if (t >= points[hi].t) return hi;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].t <= t) lo = mid; else hi = mid;
+  }
+  return (t - points[lo].t) <= (points[hi].t - t) ? lo : hi;
+}
+
+function drawHover(ctx, c) {
+  const fmtT = (ms) => {
+    const total = Math.max(0, Math.round(ms / 1000));
+    const m = Math.floor(total / 60);
+    const sec = total % 60;
+    return m + ':' + String(sec).padStart(2, '0');
+  };
+  const y = Math.max(c.padT, Math.min(c.padT + c.h, c.y));
+
+  // 竖线
+  ctx.save();
+  ctx.strokeStyle = ASH;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(c.x, c.padT);
+  ctx.lineTo(c.x, c.padT + c.h);
+  ctx.stroke();
+  ctx.restore();
+
+  // 曲线上的点
+  ctx.fillStyle = INK;
+  ctx.beginPath(); ctx.arc(c.x, y, 3, 0, Math.PI * 2); ctx.fill();
+  if (c.yHr != null) {
+    ctx.fillStyle = GRAPHITE;
+    ctx.beginPath(); ctx.arc(c.x, c.yHr, 2.5, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // 读数框
+  const lines = [
+    fmtT(c.d.t) + ' 分钟处',
+    '功率 ' + Math.round(c.power) + ' W',
+  ];
+  if (c.hr != null) lines.push('心率 ' + Math.round(c.hr) + ' bpm');
+  ctx.font = '11px Inter, system-ui, sans-serif';
+  const lh = 15;
+  let boxW = 0;
+  lines.forEach((t) => { boxW = Math.max(boxW, ctx.measureText(t).width); });
+  boxW += 16;
+  const boxH = lines.length * lh + 10;
+  let boxX = c.x + 12;
+  if (boxX + boxW > c.padL + c.w) boxX = c.x - 12 - boxW;
+  const boxY = Math.max(c.padT + 2, Math.min(c.padT + c.h - boxH - 2, y - boxH / 2));
+
+  ctx.fillStyle = PAPER;
+  ctx.strokeStyle = MIST;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(boxX, boxY, boxW, boxH, 6);
+  else ctx.rect(boxX, boxY, boxW, boxH);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = GRAPHITE;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  lines.forEach((t, i) => {
+    ctx.fillStyle = i === 0 ? ASH : (i === 1 ? INK : GRAPHITE);
+    ctx.fillText(t, boxX + 8, boxY + 6 + i * lh);
+  });
+}
+
+/* 给图表挂上鼠标悬停（重复调用不会重复绑） */
+function attachChartHover(canvas) {
+  if (canvas.__hoverBound) return;
+  canvas.__hoverBound = true;
+  const toT = (ev) => {
+    const st = canvas.__chart;
+    if (!st || st.usable.length < 2) return null;
+    const rect = canvas.getBoundingClientRect();
+    const cssX = ev.clientX - rect.left;        // 画布内部坐标（CSS 像素，与绘制一致）
+    const usable = st.usable;
+    const plotL = st.X(usable[0].t);
+    const plotR = st.X(usable[usable.length - 1].t);
+    const px = Math.max(0, Math.min(plotR - plotL, cssX - plotL));
+    return usable[0].t + (px / (plotR - plotL)) * (usable[usable.length - 1].t - usable[0].t);
+  };
+
+  canvas.addEventListener('mousemove', (ev) => {
+    const t = toT(ev);
+    if (t == null) return;
+    const st = canvas.__chart;
+    drawPowerChart(canvas, st.points, Object.assign({}, st.opts, { hoverT: t }));
+  });
+  canvas.addEventListener('mouseleave', () => {
+    const st = canvas.__chart;
+    if (st) drawPowerChart(canvas, st.points, Object.assign({}, st.opts, { hoverT: null }));
+  });
 }
 
 function drawChart() {
@@ -2631,7 +2755,7 @@ els.hrLimitEnabled.addEventListener('change', () => {
   syncHrLimitDisabled();
   scheduleHrSettingsSave();
 });
-[els.hrMaxInput, els.hrRestInput, els.hrLimitInput].forEach((el) => {
+[els.hrMaxInput, els.hrLimitInput].forEach((el) => {
   el.addEventListener('input', scheduleHrSettingsSave);
 });
 
@@ -2835,7 +2959,9 @@ window.addEventListener('resize', () => {
     const points = (lastSummary.trace || []).map((d) => ({
       t: d.t * 1000, p: d.p, target: d.target, hr: d.hr,
     }));
-    drawPowerChart(els.sumChart, points, { hrMax: (lastSummary.heart_rate || {}).max_bpm });
+    drawPowerChart(els.sumChart, points, {
+      hrMax: (lastSummary.heart_rate || {}).max_bpm, interactive: true,
+    });
   }
   if (currentPlan) renderPlanPreview();
   if (editingCourse) renderCustomPlanPreview();
