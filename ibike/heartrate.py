@@ -35,7 +35,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from bleak import BleakClient
 
-from .ble import RawDevice
+from .ble import BleScanError, RawDevice, scan_raw
 
 log = logging.getLogger("ibike.heartrate")
 
@@ -57,6 +57,7 @@ RECONNECT_DELAYS_S = (2.0, 5.0, 10.0, 20.0, 30.0)
 # 永远不会触发。这里用一个静默看门狗兜住这种情况。
 HR_SILENT_RESTART_S = 20.0
 HR_WATCHDOG_INTERVAL_S = 5.0
+HR_RECONNECT_SCAN_S = 4.0      # 重连时每轮扫描的窗口
 
 # 物理上不可能的心率：用来识别"带子没戴好/电极没湿"而不是照单全收
 HR_MIN_PLAUSIBLE = 25
@@ -215,6 +216,7 @@ class HeartRateClient:
         self._chars: Dict[str, Any] = {}
         self._reconnect_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
+        self._scanning = False
         self._closing = False
         self._disconnect_reason = ""
 
@@ -418,18 +420,53 @@ class HeartRateClient:
         self._reconnect_task = asyncio.ensure_future(self._reconnect_loop())
 
     async def _reconnect_loop(self) -> None:
-        """循环重连。心率带飘出范围、电量耗尽、被别的 App 抢走都会走这里。"""
+        """循环重连。心率带飘出范围、电量耗尽、被别的 App 抢走都会走这里。
+
+        第一轮先直连记住的地址（快，短暂断链时地址还有效）；从第二轮开始**先扫描**
+        再连。原因和骑行台一样：macOS 眼里的设备标识是随机地址，带子重新广播之后
+        旧地址就连不上了。真机踩过——心率带掉线后 5 次重连全部失败、直接放弃，
+        可它其实就在旁边广播着，只是地址变了。
+        """
+        attempt = 0
         for delay in RECONNECT_DELAYS_S:
             await asyncio.sleep(delay)
+            attempt += 1
             if self._closing or not self.auto_reconnect:
                 return
-            try:
-                await self.connect(self.address, name=self.name)
-                self._emit_event("hr-reconnected", "心率带已重新连接")
-                return
-            except HeartRateError as exc:
-                log.warning("心率带重连失败：%s", exc)
+            candidates = await self._reconnect_candidates(use_scan=attempt > 1)
+            last_error: Optional[HeartRateError] = None
+            for address in candidates:
+                if self._closing or not self.auto_reconnect:
+                    return
+                try:
+                    await self.connect(address, name=self.name)
+                    self._emit_event("hr-reconnected", "心率带已重新连接")
+                    return
+                except HeartRateError as exc:
+                    last_error = exc
+                    log.warning("心率带重连失败（%s）：%s", address, exc)
+            if last_error is not None:
+                log.warning("心率带第 %d 轮重连失败：%s", attempt, last_error)
         self._emit_event("hr-reconnect-gave-up", "心率带重连多次失败，请在设置里重新连接")
+
+    async def _reconnect_candidates(self, use_scan: bool) -> List[str]:
+        """这一轮要试哪些地址：记住的 + （需要时）刚扫到的（排在前面）。"""
+        saved = self.address
+        if not use_scan or self._scanning:
+            return [saved] if saved else []
+        self._scanning = True
+        scanned: List[str] = []
+        try:
+            raw = await scan_raw(timeout=HR_RECONNECT_SCAN_S)
+            scanned = [d.address for d in self.classify_straps(raw)]
+        except BleScanError as exc:
+            log.info("心率带重连扫描失败：%s", exc)
+        except Exception:                       # noqa: BLE001 - 扫描失败不该打断重连
+            log.info("心率带重连扫描异常", exc_info=True)
+        finally:
+            self._scanning = False
+        # 扫到的排前面（那才是现在有效的地址），记住的放最后兜底
+        return scanned + ([saved] if saved and saved not in scanned else [])
 
     def _emit_event(self, kind: str, message: str) -> None:
         if self.on_event is not None:
