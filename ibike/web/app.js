@@ -2722,7 +2722,9 @@ function renderHr(stateObj) {
     return;
   }
   if (hr.stale || bpm == null) {
-    els.hrHint.textContent = '已连接，但没收到心率数据（检查带子和电极）';
+    els.hrHint.textContent = hr.reconnecting
+      ? '没收到数据，正在重连…'
+      : '已连接，但没收到心率数据（检查带子和电极）';
   } else if (stateObj.hr_source === 'trainer') {
     // 没配心率带时才会用骑行台自带的心率字段。它是固件估的，实测会卡在一个
     // 看着合理的数字上（和手表对不上），所以必须明说来源，别让人以为程序坏了。

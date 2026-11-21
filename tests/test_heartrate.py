@@ -10,6 +10,7 @@ import asyncio
 import os as _os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -132,6 +133,42 @@ def test_zones() -> None:
     check(hr_zone_of(150, 200)["code"] == "Z3", "150 / 200 落在 Z3",
           str(hr_zone_of(150, 200)))
     check(hr_zone_of(50, 190)["code"] == "Z1", "低心率归 Z1")
+
+
+def test_silent_stall_is_restarted() -> None:
+    """链路"连着"但一直没数据时，必须主动重启，不能干等。
+
+    真机反馈：中途暂停再接着骑，骑行台自动重连了，心率带却再没数据。
+    当时的实现只在 BLE 报"断开"时重连，而带子静默（电极干、休眠、链路半死）时
+    根本没有断开事件，于是永远不重连。
+    """
+    print("\n[2b] 心率带静默超时会触发重启")
+    from ibike.heartrate import HR_SILENT_RESTART_S, HeartRateClient
+
+    client = HeartRateClient()
+    client.connected = True
+    client.address = "AA:BB"
+    client.auto_reconnect = True
+
+    client.last_data_time = time.monotonic() - 1.0
+    check(client._should_restart_silent() is False, "刚收到数据不重启")
+
+    client.last_data_time = time.monotonic() - (HR_SILENT_RESTART_S + 1)
+    check(client._should_restart_silent() is True, "静默超过阈值要重启")
+
+    client.connected = False
+    check(client._should_restart_silent() is False,
+          "已经断开时不重复触发（交给断开重连那条路）")
+
+    client.connected = True
+    client.auto_reconnect = False
+    client.last_data_time = time.monotonic() - (HR_SILENT_RESTART_S + 1)
+    check(client._should_restart_silent() is False,
+          "关掉自动重连的用户不被打扰")
+
+    client.auto_reconnect = True
+    client._closing = True
+    check(client._should_restart_silent() is False, "主动断开过程中不触发")
 
 
 # ======================================================================
@@ -725,6 +762,7 @@ def main() -> int:
     test_parse()
     test_zones()
     asyncio.run(test_session_heart_rate())
+    test_silent_stall_is_restarted()
     asyncio.run(test_hr_cap_protection())
     asyncio.run(test_strap_staleness())
     asyncio.run(test_hr_endpoints())

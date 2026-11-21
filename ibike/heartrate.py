@@ -51,6 +51,12 @@ HR_STALE_AFTER_S = 10.0
 
 # 重连节奏：心率带飘出范围很常见，断了要自己找回
 RECONNECT_DELAYS_S = (2.0, 5.0, 10.0, 20.0, 30.0)
+# 链路还"连着"但一直没有数据多久之后，主动重启这条链路。
+# 真机踩过：暂停歇一会儿再踩，骑行台自动连回来了，心率带却再没数据进来——
+# 链路上没有断开事件（BLE 那边不报），只是通知停了，于是原来的重连逻辑
+# 永远不会触发。这里用一个静默看门狗兜住这种情况。
+HR_SILENT_RESTART_S = 20.0
+HR_WATCHDOG_INTERVAL_S = 5.0
 
 # 物理上不可能的心率：用来识别"带子没戴好/电极没湿"而不是照单全收
 HR_MIN_PLAUSIBLE = 25
@@ -208,6 +214,7 @@ class HeartRateClient:
         self._client: Optional[BleakClient] = None
         self._chars: Dict[str, Any] = {}
         self._reconnect_task: Optional[asyncio.Task] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
         self._closing = False
         self._disconnect_reason = ""
 
@@ -282,6 +289,7 @@ class HeartRateClient:
         # 电量是顺带的，失败无所谓
         self.battery = await self._read_battery()
         self.last_data_time = time.monotonic()
+        self._watchdog_task = asyncio.ensure_future(self._silent_watchdog())
         self._emit_event("hr-connected", "心率带已连接：{}".format(self.name or address))
         log.info("心率带已连接：%s（%s）", self.name, address)
 
@@ -312,6 +320,9 @@ class HeartRateClient:
         self._closing = False
 
     async def _teardown(self) -> None:
+        wd, self._watchdog_task = self._watchdog_task, None
+        if wd is not None and not wd.done():
+            wd.cancel()
         client, self._client = self._client, None
         if client is not None:
             try:
@@ -352,6 +363,41 @@ class HeartRateClient:
                 self.on_data(dict(self.latest))
             except Exception:
                 log.exception("心率数据回调出错")
+
+    def _should_restart_silent(self) -> bool:
+        """链路还在，但超过 HR_SILENT_RESTART_S 没有一帧数据 → 该重启了。"""
+        if not self.connected or self._closing or not self.auto_reconnect:
+            return False
+        if not self.last_data_time:
+            return True
+        return (time.monotonic() - self.last_data_time) > HR_SILENT_RESTART_S
+
+    async def _silent_watchdog(self) -> None:
+        """盯着"连着但没数据"的情况，超时就主动断开重连。
+
+        只靠 BLE 的断开回调是不够的：带子电极干了、进入休眠、或者链路半死不活时，
+        通知会停但不会有断开事件，于是数据永远不来、界面一直显示"已连接但没数据"。
+        """
+        while not self._closing:
+            await asyncio.sleep(HR_WATCHDOG_INTERVAL_S)
+            if self._closing:
+                return
+            if not self.connected:
+                return
+            if not self._should_restart_silent():
+                continue
+            silent = time.monotonic() - (self.last_data_time or time.monotonic())
+            log.warning("心率带静默 %.0f 秒，主动重启链路", silent)
+            self._emit_event("hr-stale-restart",
+                             "心率带 {:.0f} 秒没有数据，正在重连".format(silent))
+            # 先把自己从任务槽里摘掉，否则 _teardown 会把当前这个看门狗任务
+            # cancel 掉，下面的 disconnected/_schedule_reconnect 就永远执行不到
+            self._watchdog_task = None
+            await self._teardown()
+            self.connected = False
+            if self.auto_reconnect and self.address:
+                self._schedule_reconnect()
+            return
 
     def _on_disconnected(self, _client: Any) -> None:
         was_connected = self.connected
@@ -403,6 +449,9 @@ class HeartRateClient:
             "contact": (self.latest or {}).get("contact"),
             "rr_seen": self.rr_seen,
             "stale": self.is_stale(),
+            # 模拟器继承了这个 state() 但没有重连任务，用 getattr 兜一下
+            "reconnecting": bool(getattr(self, "_reconnect_task", None) is not None
+                                 and not self._reconnect_task.done()),
         }
 
     def is_stale(self) -> bool:
@@ -524,4 +573,7 @@ class SimulatedHeartRate:
             "contact": (self.latest or {}).get("contact"),
             "rr_seen": self.rr_seen,
             "stale": self.is_stale(),
+            # 模拟器继承了这个 state() 但没有重连任务，用 getattr 兜一下
+            "reconnecting": bool(getattr(self, "_reconnect_task", None) is not None
+                                 and not self._reconnect_task.done()),
         }
