@@ -382,12 +382,23 @@ input[type="range"] { accent-color: var(--color-deep-teal); width: 100%; }
   font-size: var(--text-body-sm);
   color: var(--color-ink);
 }
-.plan-stats { font-size: var(--text-body-sm); color: var(--color-graphite); }
+.plan-stats {
+  display: flex; flex-wrap: wrap; gap: var(--spacing-4) var(--spacing-12);
+  font-size: var(--text-body-sm); color: var(--color-graphite);
+}
+.plan-stat { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
+.plan-stat strong { color: var(--color-ink); font-weight: var(--w-medium); }
 .plan-list { display: flex; flex-direction: column; gap: 2px; }
-.plan-stat { display: grid; grid-template-columns: 28px 1fr auto; gap: var(--spacing-8); font-size: var(--text-body-sm); color: var(--color-graphite); padding: 4px 0; border-bottom: 1px solid var(--color-warm-mist); }
-.plan-stat:last-child { border-bottom: 0; }
-.plan-stat.work { color: var(--color-ink); }
+.plan-list li {
+  display: grid; grid-template-columns: 24px 1fr 60px 56px;
+  gap: var(--spacing-8); align-items: center;
+  padding: 4px 0; font-size: var(--text-body-sm); color: var(--color-graphite);
+  border-bottom: 1px solid var(--color-warm-mist);
+}
+.plan-list li:last-child { border-bottom: 0; }
+.plan-list li.work { color: var(--color-ink); }
 .pl-idx { color: var(--color-ash); font-variant-numeric: tabular-nums; }
+.pl-name { color: var(--color-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-dur, .pl-pow { font-variant-numeric: tabular-nums; text-align: right; }
 
 /* 课表进度条 */
@@ -415,9 +426,27 @@ input[type="range"] { accent-color: var(--color-deep-teal); width: 100%; }
 .param { display: flex; flex-direction: column; gap: 2px; }
 .param-label { font-size: var(--text-body-sm); color: var(--color-graphite); }
 .param-unit { font-size: var(--text-caption); color: var(--color-ash); }
-.param-input { width: 100%; }
+/* 参数项：标签在上，(输入框 + 单位) 在同一行——单位不能掉到下一行 */
+.param-input { display: flex; align-items: center; gap: 6px; }
+.param-input input { flex: 1 1 auto; min-width: 0; width: auto; }
+.param-input .param-unit { flex: 0 0 auto; }
 .step-rows { display: flex; flex-direction: column; gap: var(--spacing-4); }
-.step-row { display: grid; grid-template-columns: 20px 1fr 64px 64px auto; gap: var(--spacing-8); align-items: center; }
+/* 小节行：序号 / 类型 / 名称 / 时长(数字+单位) / 功率(数字+单位) / 上下移+删除 */
+.step-row {
+  display: grid;
+  grid-template-columns: 20px 78px minmax(0,1fr) 96px 96px 84px;
+  gap: var(--spacing-8); align-items: center;
+}
+.step-row .sr-kind, .step-row .sr-name { width: 100%; min-width: 0; }
+.sr-dur, .sr-pow { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.sr-dur input, .sr-pow input { flex: 1 1 auto; min-width: 0; width: auto; padding: 6px 8px; font-size: var(--text-body-sm); }
+.sr-dur select, .sr-pow select { flex: 0 0 auto; width: auto; padding: 6px 4px; font-size: var(--text-body-sm); }
+.sr-btns button {
+  padding: 2px 6px; border: 1px solid var(--color-warm-mist);
+  border-radius: var(--radius-buttons); background: transparent;
+  color: var(--color-graphite); font-size: var(--text-body-sm); cursor: pointer;
+}
+.sr-btns button:hover { color: var(--color-ink); background: var(--color-parchment); }
 .sr-idx { color: var(--color-ash); font-size: var(--text-body-sm); font-variant-numeric: tabular-nums; }
 .sr-kind { font-size: var(--text-body-sm); color: var(--color-graphite); }
 .sr-name { font-size: var(--text-body); color: var(--color-ink); }
@@ -642,6 +671,10 @@ canvas#ivChart         { height: 64px; }
 }
 
 @media (max-width: 700px) {
+  .step-row { grid-template-columns: 20px minmax(0,1fr) 84px; row-gap: 6px; }
+  .step-row .sr-kind { grid-column: 2 / 3; }
+  .sr-dur, .sr-pow { grid-column: 2 / 3; }
+  .sr-btns { grid-column: 3 / 4; grid-row: 1; }
   .metrics, .metrics--3, .dev-metrics, .dev-metrics-hr {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

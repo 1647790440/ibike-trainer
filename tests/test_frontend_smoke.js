@@ -566,10 +566,11 @@ if (check(!!mobileQuery, '找到窄屏媒体查询')) {
   // 这是当初那个真实 bug 的防线）
   const stepCols = /\.step-row\s*\{[^}]*grid-template-columns:\s*([^;]+);/.exec(cssText);
   if (check(!!stepCols, '小节行有明确的网格列定义')) {
+    // 序号 / 类型 / 名称 / 时长(数字+单位) / 功率(数字+单位) / 按钮
     const parts = stepCols[1].trim().split(/\s+/);
-    check(parts.length === 5, '小节行是 5 列', parts.join(' '));
-    check(parts[1] === '1fr', '名字那一列可伸缩（不会被指数列挤没）',
-          parts[1]);
+    check(parts.length === 6, '小节行是 6 列', parts.join(' '));
+    check(/minmax\(0,\s*1fr\)/.test(parts[2]),
+          '名字那一列可伸缩（不会被挤没）', parts[2]);
   }
 }
 
